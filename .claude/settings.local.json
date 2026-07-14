@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm approve-builds *)",
+      "Bash(pnpm typecheck *)",
+      "Bash(node_modules/.bin/tsc --noEmit)"
+    ]
+  }
+}
