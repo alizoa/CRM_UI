@@ -16,7 +16,6 @@ import {
   markLeadLost,
   reopenLead,
   updateLead,
-  type DuplicateContactCandidate,
   type Lead,
   type LeadTemperature,
   type UpdateLeadInput,
@@ -32,7 +31,6 @@ type FormState = {
   temperature: LeadTemperature | '';
   ownerId: string;
   leadSourceId: string;
-  nextFollowUpAt: string;
 };
 
 function requestError(error: unknown, fallback: string): RequestError {
@@ -41,22 +39,6 @@ function requestError(error: unknown, fallback: string): RequestError {
     return { status: value.status, message: value.message || fallback };
   }
   return { status: 0, message: fallback };
-}
-
-function duplicateCandidates(error: unknown) {
-  if (!error || typeof error !== 'object' || !('status' in error) || (error as HttpError).status !== 409) return null;
-  const details = (error as HttpError).details;
-  if (!details || typeof details !== 'object' || !('duplicateCandidates' in details)) return null;
-  const candidates = (details as { duplicateCandidates?: unknown }).duplicateCandidates;
-  return Array.isArray(candidates) ? candidates as DuplicateContactCandidate[] : null;
-}
-
-function dateTimeInput(value: string | null) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
 }
 
 function formState(lead: Lead): FormState {
@@ -68,7 +50,6 @@ function formState(lead: Lead): FormState {
     temperature: lead.temperature ?? '',
     ownerId: lead.ownerId ?? '',
     leadSourceId: lead.leadSourceId ?? '',
-    nextFollowUpAt: dateTimeInput(lead.nextFollowUpAt),
   };
 }
 
@@ -81,16 +62,11 @@ function updateInput(form: FormState): UpdateLeadInput {
     temperature: form.temperature || null,
     ownerId: form.ownerId || null,
     leadSourceId: form.leadSourceId || null,
-    nextFollowUpAt: form.nextFollowUpAt ? new Date(form.nextFollowUpAt).toISOString() : null,
   };
 }
 
 function optionName(option: MembershipOption) {
   return [option.user.firstName, option.user.lastName].filter(Boolean).join(' ') || option.user.email;
-}
-
-function candidateName(candidate: DuplicateContactCandidate) {
-  return [candidate.firstName, candidate.lastName].filter(Boolean).join(' ') || 'Unnamed contact';
 }
 
 export function LeadDetailPage() {
@@ -109,8 +85,6 @@ export function LeadDetailPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [memberships, setMemberships] = useState<MembershipOption[]>([]);
   const [leadSources, setLeadSources] = useState<LeadSourceOption[]>([]);
-  const [duplicateContacts, setDuplicateContacts] = useState<DuplicateContactCandidate[] | null>(null);
-
   const fetchLead = useCallback(async () => {
     if (!accessToken || !id) {
       setError(!id ? { status: 404, message: 'Lead not found.' } : null);
@@ -217,7 +191,7 @@ export function LeadDetailPage() {
   async function convert(confirmDuplicate: boolean) {
     if (!accessToken || !lead) return;
     if (!lead.firstName?.trim()) {
-      setActionError({ status: 422, message: 'Add a first name before converting this lead.' });
+      setActionError({ status: 422, message: 'Add a first name before marking this lead won.' });
       return;
     }
     setActionLoading(true);
@@ -225,17 +199,12 @@ export function LeadDetailPage() {
     setSuccess(null);
     try {
       const response = await convertLead(accessToken, lead.id, confirmDuplicate);
-      setDuplicateContacts(null);
-      navigate(`/contacts/${response.contact.id}`, {
-        state: { conversionSuccess: 'Lead converted to Prospect.' },
-      });
+      setLead(response.lead);
+      setForm(formState(response.lead));
+      setEditing(false);
+      setSuccess('Lead marked won.');
     } catch (requestFailure) {
-      const candidates = duplicateCandidates(requestFailure);
-      if (!confirmDuplicate && candidates?.length) {
-        setDuplicateContacts(candidates);
-      } else {
-        setActionError(requestError(requestFailure, 'Could not convert lead.'));
-      }
+      setActionError(requestError(requestFailure, 'Could not mark lead won.'));
     } finally {
       setActionLoading(false);
     }
@@ -285,7 +254,6 @@ export function LeadDetailPage() {
                     <Field label="Temperature"><select value={form.temperature} onChange={(event) => setForm({ ...form, temperature: event.target.value as LeadTemperature | '' })} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"><option value="">Not set</option><option value="HOT">Hot</option><option value="WARM">Warm</option><option value="COLD">Cold</option></select></Field>
                     <Field label="Owner"><select value={form.ownerId} onChange={(event) => setForm({ ...form, ownerId: event.target.value })} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"><option value="">Unassigned</option>{memberships.map((item) => <option key={item.id} value={item.userId}>{optionName(item)}</option>)}</select></Field>
                     <Field label="Lead source"><select value={form.leadSourceId} onChange={(event) => setForm({ ...form, leadSourceId: event.target.value })} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"><option value="">No configured source</option>{leadSources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
-                    <Field label="Next follow-up"><input type="datetime-local" value={form.nextFollowUpAt} onChange={(event) => setForm({ ...form, nextFollowUpAt: event.target.value })} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" /></Field>
                     {saveError ? <p className="sm:col-span-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{saveError.message}</p> : null}
                     <div className="flex gap-2 sm:col-span-2">
                       <button type="submit" disabled={saveLoading} className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white disabled:bg-emerald-300">{saveLoading ? 'Saving...' : 'Save'}</button>
@@ -295,11 +263,14 @@ export function LeadDetailPage() {
                 </section>
               ) : null}
             </div>
-            <EntityTasksPanel
-              entityType="LEAD"
-              entityId={lead.id}
-              title="Lead follow-up tasks"
-            />
+            <div id="lead-tasks">
+              <EntityTasksPanel
+                entityType="LEAD"
+                entityId={lead.id}
+                title="Lead follow-up tasks"
+                onTasksChanged={() => void fetchLead()}
+              />
+            </div>
             <EntityNotesPanel
               entityType="LEAD"
               entityId={lead.id}
@@ -314,26 +285,6 @@ export function LeadDetailPage() {
         ) : null}
       </div>
 
-      {duplicateContacts ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="duplicate-title">
-          <section className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
-            <h2 id="duplicate-title" className="text-lg font-semibold text-gray-900">Possible duplicate contacts</h2>
-            <p className="mt-2 text-sm text-gray-700">Existing contacts share this phone or email. Converting will create a new contact. It will not merge with existing contacts.</p>
-            <ul className="mt-5 divide-y divide-gray-200 rounded-lg border border-gray-200">
-              {duplicateContacts.map((candidate) => (
-                <li key={candidate.id} className="p-4">
-                  <p className="font-semibold text-gray-900">{candidateName(candidate)}</p>
-                  <p className="mt-1 text-sm text-gray-600">{candidate.email || 'No email'} · {candidate.phone || 'No phone'} · {candidate.status}</p>
-                </li>
-              ))}
-            </ul>
-            <div className="mt-6 flex justify-end gap-2">
-              <button type="button" disabled={actionLoading} onClick={() => setDuplicateContacts(null)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700">Cancel</button>
-              <button type="button" disabled={actionLoading} onClick={() => void convert(true)} className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white disabled:bg-emerald-300">{actionLoading ? 'Converting...' : 'Convert anyway'}</button>
-            </div>
-          </section>
-        </div>
-      ) : null}
     </AppShell>
   );
 }

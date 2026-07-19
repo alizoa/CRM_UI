@@ -5,8 +5,8 @@ import { TaskCalendarView } from '../components/tasks/TaskCalendarView';
 import { TaskDetailModal } from '../components/tasks/TaskDetailModal';
 import { TaskKanbanView } from '../components/tasks/TaskKanbanView';
 import { useAuth } from '../context/AuthContext';
-import { listContacts, type Contact } from '../lib/contacts';
-import { listDeals, type Deal } from '../lib/deals';
+import type { Contact } from '../lib/contacts';
+import type { Deal } from '../lib/deals';
 import type { HttpError } from '../lib/http';
 import { listLeads, type Lead } from '../lib/leads';
 import { listMembershipOptions, type MembershipOption } from '../lib/memberships';
@@ -15,6 +15,7 @@ import {
   createTask,
   listTasks,
   reopenTask,
+  updateTask,
   type CreateTaskInput,
   type EntityType,
   type Task,
@@ -36,7 +37,7 @@ type StatusFilter = 'all' | TaskStatus;
 type DueBucketFilter = 'all' | TaskDueBucket;
 type LocalDueBucket = TaskDueBucket | 'completed';
 type TaskViewMode = 'daily' | 'table' | 'kanban' | 'calendar';
-type TaskSortKey = 'dueAt' | 'createdAt' | 'title' | 'entityType' | 'assignee' | 'status' | 'completion';
+type TaskSortKey = 'dueAt' | 'title' | 'lead' | 'assignee' | 'status';
 type TaskSortDirection = 'asc' | 'desc';
 
 type TaskFormState = {
@@ -53,9 +54,11 @@ const CALENDAR_TASKS_LIMIT = 500;
 const TASK_OPTIONS_LIMIT = 100;
 const DEFAULT_COMPLETED_FILTER: CompletedFilter = 'open';
 const DEFAULT_ASSIGNEE_FILTER: AssigneeFilter = 'me';
-const DEFAULT_ENTITY_TYPE_FILTER: EntityTypeFilter = 'all';
+const DEFAULT_ENTITY_TYPE_FILTER: EntityTypeFilter = 'LEAD';
 const DEFAULT_STATUS_FILTER: StatusFilter = 'all';
 const DEFAULT_DUE_BUCKET_FILTER: DueBucketFilter = 'all';
+const TASK_VIEW_STORAGE_KEY = 'alozix.tasks.view';
+const ACTIVE_TASK_LEAD_STATUSES = new Set(['NEW', 'CONTACTED', 'FOLLOW_UP_NEEDED', 'QUALIFIED']);
 const INITIAL_TASK_FORM: TaskFormState = {
   title: '',
   description: '',
@@ -93,12 +96,10 @@ const QUICK_FILTER_CLASS =
 
 const SORT_LABELS: Record<TaskSortKey, string> = {
   dueAt: 'Due date',
-  createdAt: 'Created date',
   title: 'Task title',
-  entityType: 'Record type',
+  lead: 'Lead',
   assignee: 'Assignee',
   status: 'Status',
-  completion: 'Completion status',
 };
 
 function formatTaskCount(count: number) {
@@ -179,6 +180,19 @@ function formatDateTime(value: string | null | undefined) {
   }
 
   return date.toLocaleString();
+}
+
+function toLocalDateTimeInput(value: string | null | undefined) {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
 function getLocalDayStart(date: Date) {
@@ -280,7 +294,7 @@ function getLocalDueBucket(task: Task): LocalDueBucket {
 
 function buildCreateTaskInput(form: TaskFormState): CreateTaskInput {
   const input: CreateTaskInput = {
-    entityType: form.entityType,
+    entityType: 'LEAD',
     entityId: form.entityId,
     title: form.title.trim(),
   };
@@ -401,14 +415,14 @@ function mergeUniqueTasks(primary: Task[], secondary: Task[]) {
 function getFilterSummary(
   completedFilter: CompletedFilter,
   assigneeFilter: AssigneeFilter,
-  entityTypeFilter: EntityTypeFilter,
+  _entityTypeFilter: EntityTypeFilter,
   statusFilter: StatusFilter,
   dueBucketFilter: DueBucketFilter,
 ) {
   const assigneeLabel = assigneeFilter === 'me' ? 'My' : 'All visible';
   const completionLabel =
     completedFilter === 'open' ? 'open tasks' : completedFilter === 'completed' ? 'completed tasks' : 'tasks';
-  const entityLabel = entityTypeFilter === 'all' ? '' : `${ENTITY_LABELS[entityTypeFilter].toLowerCase()} `;
+  const entityLabel = 'lead ';
   const statusLabel = statusFilter === 'all' ? '' : ` with status ${STATUS_LABELS[statusFilter].toLowerCase()}`;
   const dueLabel =
     dueBucketFilter === 'all'
@@ -503,6 +517,7 @@ function sortTasks(
   sortKey: TaskSortKey,
   sortDirection: TaskSortDirection,
   membershipsByUserId: Map<string, MembershipOption>,
+  leadsById: Map<string, Lead>,
 ) {
   const direction = sortDirection === 'asc' ? 1 : -1;
 
@@ -511,18 +526,14 @@ function sortTasks(
 
     if (sortKey === 'dueAt') {
       result = compareNullableDates(left.dueAt, right.dueAt);
-    } else if (sortKey === 'createdAt') {
-      result = compareNullableDates(left.createdAt, right.createdAt);
     } else if (sortKey === 'title') {
       result = compareText(left.title, right.title);
-    } else if (sortKey === 'entityType') {
-      result = compareText(ENTITY_LABELS[left.entityType], ENTITY_LABELS[right.entityType]);
+    } else if (sortKey === 'lead') {
+      result = compareText(getTaskEntityLabel(left, new Map(), new Map(), leadsById), getTaskEntityLabel(right, new Map(), new Map(), leadsById));
     } else if (sortKey === 'assignee') {
       result = compareText(getTaskAssigneeLabel(left, membershipsByUserId), getTaskAssigneeLabel(right, membershipsByUserId));
     } else if (sortKey === 'status') {
       result = compareText(STATUS_LABELS[left.status], STATUS_LABELS[right.status]);
-    } else {
-      result = Number(isTaskCompleted(left)) - Number(isTaskCompleted(right));
     }
 
     if (result === 0) {
@@ -652,14 +663,25 @@ export function TasksPage() {
   const [entityTypeFilter, setEntityTypeFilter] = useState<EntityTypeFilter>(DEFAULT_ENTITY_TYPE_FILTER);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(DEFAULT_STATUS_FILTER);
   const [dueBucketFilter, setDueBucketFilter] = useState<DueBucketFilter>(DEFAULT_DUE_BUCKET_FILTER);
-  const [viewMode, setViewMode] = useState<TaskViewMode>('daily');
+  const [taskSearch, setTaskSearch] = useState('');
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
+    upcoming: false,
+    no_due_date: false,
+  });
+  const [viewMode, setViewMode] = useState<TaskViewMode>(() => {
+    if (typeof window === 'undefined') {
+      return 'daily';
+    }
+
+    const storedViewMode = window.localStorage.getItem(TASK_VIEW_STORAGE_KEY);
+    return storedViewMode === 'table' || storedViewMode === 'kanban' || storedViewMode === 'calendar' || storedViewMode === 'daily'
+      ? storedViewMode
+      : 'daily';
+  });
   const [sortKey, setSortKey] = useState<TaskSortKey>('dueAt');
   const [sortDirection, setSortDirection] = useState<TaskSortDirection>('asc');
   const [page, setPage] = useState(1);
-  const [calendarMonth, setCalendarMonth] = useState(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
-  });
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date());
   const [refreshKey, setRefreshKey] = useState(0);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [form, setForm] = useState<TaskFormState>(INITIAL_TASK_FORM);
@@ -679,10 +701,10 @@ export function TasksPage() {
     () => ({
       completed: getCompletionFilterValue(completedFilter),
       assigneeId: assigneeFilter === 'me' ? user?.id : undefined,
-      entityType: entityTypeFilter === 'all' ? undefined : entityTypeFilter,
+      entityType: 'LEAD',
       status: statusFilter === 'all' ? undefined : statusFilter,
     }),
-    [assigneeFilter, completedFilter, entityTypeFilter, statusFilter, user?.id],
+    [assigneeFilter, completedFilter, statusFilter, user?.id],
   );
 
   const taskFilters = useMemo<TaskFilters>(
@@ -719,6 +741,32 @@ export function TasksPage() {
   const leadsById = useMemo(() => new Map(leads.map((lead) => [lead.id, lead])), [leads]);
   const membershipsByUserId = useMemo(() => new Map(memberships.map((membership) => [membership.userId, membership])), [memberships]);
   const tasks = tasksData?.data ?? [];
+  const normalizedTaskSearch = normalizeSearch(taskSearch);
+  const visibleTasks = useMemo(() => {
+    const activeLeadTasks = tasks.filter((task) => {
+      const lead = leadsById.get(task.entityId);
+      return !lead || ACTIVE_TASK_LEAD_STATUSES.has(lead.status);
+    });
+
+    if (!normalizedTaskSearch) {
+      return activeLeadTasks;
+    }
+
+    return activeLeadTasks.filter((task) => {
+      const lead = leadsById.get(task.entityId);
+      const searchText = joinOptionParts([
+        task.title,
+        task.description,
+        getTaskEntityLabel(task, contactsById, dealsById, leadsById),
+        lead?.email,
+        lead?.phone,
+        lead?.source,
+        lead?.sourceDetail,
+      ]).toLowerCase();
+
+      return searchText.includes(normalizedTaskSearch);
+    });
+  }, [contactsById, dealsById, leadsById, normalizedTaskSearch, tasks]);
   const totalTasks = tasksData?.total ?? tasks.length;
   const currentPage = tasksData?.page ?? page;
   const currentLimit = tasksData?.limit ?? TASKS_PAGE_LIMIT;
@@ -726,12 +774,12 @@ export function TasksPage() {
   const hasPreviousPage = currentPage > 1;
   const hasNextPage = currentPage * currentLimit < totalTasks;
   const groupedTasks = useMemo(
-    () => groupTasks(tasks, completedFilter, dueBucketFilter),
-    [completedFilter, dueBucketFilter, tasks],
+    () => groupTasks(visibleTasks, completedFilter, dueBucketFilter),
+    [completedFilter, dueBucketFilter, visibleTasks],
   );
   const sortedTasks = useMemo(
-    () => sortTasks(tasks, sortKey, sortDirection, membershipsByUserId),
-    [membershipsByUserId, sortDirection, sortKey, tasks],
+    () => sortTasks(visibleTasks, sortKey, sortDirection, membershipsByUserId, leadsById),
+    [leadsById, membershipsByUserId, sortDirection, sortKey, visibleTasks],
   );
   const visibleBucketCounts = useMemo(() => {
     const counts: Record<LocalDueBucket, number> = {
@@ -742,12 +790,21 @@ export function TasksPage() {
       completed: 0,
     };
 
-    for (const task of tasks) {
+    for (const task of visibleTasks) {
       counts[getLocalDueBucket(task)] += 1;
     }
 
     return counts;
-  }, [tasks]);
+  }, [visibleTasks]);
+  const myDaySummary = useMemo(
+    () => ({
+      overdue: visibleBucketCounts.overdue,
+      today: visibleBucketCounts.today,
+      inProgress: visibleTasks.filter((task) => task.status === 'IN_PROGRESS').length,
+      waiting: visibleTasks.filter((task) => task.status === 'WAITING').length,
+    }),
+    [visibleBucketCounts.overdue, visibleBucketCounts.today, visibleTasks],
+  );
   const filterSummary = getFilterSummary(completedFilter, assigneeFilter, entityTypeFilter, statusFilter, dueBucketFilter);
   const currentUserMembership = useMemo(
     () => (user?.id ? memberships.find((membership) => membership.userId === user.id) : undefined),
@@ -772,9 +829,7 @@ export function TasksPage() {
       setOptionsLoading(true);
       setOptionWarnings([]);
 
-      const [contactsResult, dealsResult, leadsResult, membershipsResult] = await Promise.allSettled([
-        listContacts(token, { page: 1, limit: TASK_OPTIONS_LIMIT }),
-        listDeals(token, { page: 1, limit: TASK_OPTIONS_LIMIT }),
+      const [leadsResult, membershipsResult] = await Promise.allSettled([
         listLeads(token, { page: 1, limit: TASK_OPTIONS_LIMIT }),
         listMembershipOptions(token),
       ]);
@@ -785,19 +840,8 @@ export function TasksPage() {
 
       const warnings: string[] = [];
 
-      if (contactsResult.status === 'fulfilled') {
-        setContacts(contactsResult.value.data);
-      } else {
-        setContacts([]);
-        warnings.push('Contact options could not be loaded.');
-      }
-
-      if (dealsResult.status === 'fulfilled') {
-        setDeals(dealsResult.value.data);
-      } else {
-        setDeals([]);
-        warnings.push('Deal options could not be loaded.');
-      }
+      setContacts([]);
+      setDeals([]);
 
       if (leadsResult.status === 'fulfilled') {
         setLeads(leadsResult.value.data);
@@ -892,9 +936,12 @@ export function TasksPage() {
 
   const handleViewModeChange = (nextViewMode: TaskViewMode) => {
     setViewMode(nextViewMode);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(TASK_VIEW_STORAGE_KEY, nextViewMode);
+    }
 
     if (nextViewMode === 'kanban') {
-      setCompletedFilter('all');
+      setCompletedFilter('open');
       setPage(1);
     }
 
@@ -909,12 +956,26 @@ export function TasksPage() {
     setCreateError(null);
   };
 
+  const openCreateFormAt = (date: Date) => {
+    const dueDate = new Date(date);
+    dueDate.setHours(9, 0, 0, 0);
+    setForm((current) => ({
+      ...buildInitialTaskForm(currentUserMembership?.userId),
+      entityId: current.entityId,
+      dueAt: toLocalDateTimeInput(dueDate.toISOString()),
+    }));
+    setShowCreateForm(true);
+    setCreateError(null);
+    setCreateSuccess(null);
+  };
+
   const handleResetFilters = () => {
     setCompletedFilter(DEFAULT_COMPLETED_FILTER);
     setAssigneeFilter(DEFAULT_ASSIGNEE_FILTER);
     setEntityTypeFilter(DEFAULT_ENTITY_TYPE_FILTER);
     setStatusFilter(DEFAULT_STATUS_FILTER);
     setDueBucketFilter(DEFAULT_DUE_BUCKET_FILTER);
+    setTaskSearch('');
     setPage(1);
   };
 
@@ -933,10 +994,6 @@ export function TasksPage() {
 
     if (nextFilters.assigneeFilter) {
       setAssigneeFilter(nextFilters.assigneeFilter);
-    }
-
-    if (nextFilters.entityTypeFilter) {
-      setEntityTypeFilter(nextFilters.entityTypeFilter);
     }
 
     if (nextFilters.statusFilter) {
@@ -972,7 +1029,7 @@ export function TasksPage() {
     if (!form.entityId) {
       setCreateError({
         status: 422,
-        message: `Select a ${ENTITY_LABELS[form.entityType].toLowerCase()} for this task.`,
+        message: 'Select a lead for this task.',
       });
       return;
     }
@@ -984,7 +1041,6 @@ export function TasksPage() {
     const createdTaskInput = buildCreateTaskInput(form);
     const createdTaskMayBeHidden =
       (assigneeFilter === 'me' && createdTaskInput.assigneeId !== user?.id) ||
-      (entityTypeFilter !== 'all' && entityTypeFilter !== createdTaskInput.entityType) ||
       (statusFilter !== 'all' && statusFilter !== (createdTaskInput.status ?? 'TODO')) ||
       dueBucketFilter !== 'all' ||
       completedFilter === 'completed';
@@ -1011,11 +1067,10 @@ export function TasksPage() {
     }
   };
 
-  const availableEntities =
-    form.entityType === 'LEAD' ? leads : form.entityType === 'CONTACT' ? contacts : deals;
+  const availableEntities = leads.filter((lead) => ACTIVE_TASK_LEAD_STATUSES.has(lead.status));
   const normalizedRecordSearch = normalizeSearch(recordSearch);
   const filteredEntities = availableEntities.filter((record) =>
-    normalizedRecordSearch ? getRecordSearchText(form.entityType, record).toLowerCase().includes(normalizedRecordSearch) : true,
+    normalizedRecordSearch ? getRecordSearchText('LEAD', record).toLowerCase().includes(normalizedRecordSearch) : true,
   );
   const selectedEntity = availableEntities.find((record) => record.id === form.entityId);
   const recordOptions =
@@ -1023,7 +1078,7 @@ export function TasksPage() {
       ? [selectedEntity, ...filteredEntities]
       : filteredEntities;
   const recordPickerMessage = getRecordPickerMessage(
-    form.entityType,
+    'LEAD',
     optionsLoading,
     availableEntities.length,
     filteredEntities.length,
@@ -1039,7 +1094,7 @@ export function TasksPage() {
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">Tasks</h1>
             <p className="mt-1 text-sm text-gray-600">
-              Daily follow-up workspace for leads, contacts, and deals.
+              My Day and follow-up work for active lead management.
             </p>
           </div>
           <button
@@ -1056,22 +1111,32 @@ export function TasksPage() {
         </div>
 
         <section className="rounded border border-gray-200 bg-white p-4">
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-4">
             <div>
               <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Overdue</p>
-              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(visibleBucketCounts.overdue)}</p>
+              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(myDaySummary.overdue)}</p>
               <p className="mt-1 text-sm text-gray-600">
-                {visibleBucketCounts.overdue > 0 ? 'Start here first.' : "You're caught up."}
+                {myDaySummary.overdue > 0 ? 'Start here first.' : "You're caught up."}
               </p>
             </div>
             <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Today</p>
-              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(visibleBucketCounts.today)}</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Due today</p>
+              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(myDaySummary.today)}</p>
               <p className="mt-1 text-sm text-gray-600">
-                {visibleBucketCounts.today > 0 ? 'Due before the day ends.' : 'No tasks due today.'}
+                {myDaySummary.today > 0 ? 'Due before the day ends.' : 'No tasks due today.'}
               </p>
             </div>
             <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">In progress</p>
+              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(myDaySummary.inProgress)}</p>
+              <p className="mt-1 text-sm text-gray-600">Currently being worked.</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Waiting</p>
+              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(myDaySummary.waiting)}</p>
+              <p className="mt-1 text-sm text-gray-600">Blocked on a reply or next step.</p>
+            </div>
+            <div className="sm:col-span-4">
               <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Current view</p>
               <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(totalTasks)}</p>
               <p className="mt-1 text-sm text-gray-600">{filterSummary}.</p>
@@ -1101,29 +1166,9 @@ export function TasksPage() {
                   required
                 />
               </label>
-              <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                Entity type
-                <select
-                  value={form.entityType}
-                  onChange={(event) => {
-                    setRecordSearch('');
-                    setForm((current) => ({
-                      ...current,
-                      entityType: event.target.value as EntityType,
-                      entityId: '',
-                    }));
-                  }}
-                  className="rounded border border-gray-300 px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
-                  required
-                >
-                  <option value="LEAD">Lead</option>
-                  <option value="CONTACT">Contact</option>
-                  <option value="DEAL">Deal</option>
-                </select>
-              </label>
               <div className="flex flex-col gap-3 sm:col-span-2 xl:col-span-1">
                 <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                  Search {ENTITY_LABELS[form.entityType].toLowerCase()}
+                  Search lead
                   <input
                     value={recordSearch}
                     onChange={(event) => {
@@ -1131,12 +1176,12 @@ export function TasksPage() {
                       setCreateError(null);
                     }}
                     disabled={optionsLoading || availableEntities.length === 0}
-                    placeholder={`Search loaded ${getEntityPluralLabel(form.entityType)}`}
+                    placeholder="Search loaded leads"
                     className="rounded border border-gray-300 px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                {ENTITY_LABELS[form.entityType]}
+                Lead
                 <select
                   value={form.entityId}
                   onChange={(event) => setForm((current) => ({ ...current, entityId: event.target.value }))}
@@ -1146,12 +1191,12 @@ export function TasksPage() {
                 >
                   <option value="">
                     {optionsLoading
-                      ? `Loading ${getEntityPluralLabel(form.entityType)}...`
-                      : `Select a ${ENTITY_LABELS[form.entityType].toLowerCase()}`}
+                      ? 'Loading leads...'
+                      : 'Select a lead'}
                   </option>
                   {recordOptions.map((record) => (
                     <option key={record.id} value={record.id}>
-                      {getRecordOptionLabel(form.entityType, record)}
+                      {getRecordOptionLabel('LEAD', record)}
                     </option>
                   ))}
                 </select>
@@ -1228,7 +1273,6 @@ export function TasksPage() {
                   applyQuickFilter({
                     completedFilter: 'open',
                     assigneeFilter: 'me',
-                    entityTypeFilter: 'all',
                     statusFilter: 'all',
                     dueBucketFilter: 'all',
                   })
@@ -1268,13 +1312,13 @@ export function TasksPage() {
                 onClick={() =>
                   applyQuickFilter({
                     completedFilter: 'open',
-                    entityTypeFilter: 'LEAD',
-                    statusFilter: 'all',
+                    statusFilter: 'IN_PROGRESS',
+                    dueBucketFilter: 'all',
                   })
                 }
                 className={QUICK_FILTER_CLASS}
               >
-                Leads
+                In progress
               </button>
             </div>
           </div>
@@ -1286,13 +1330,29 @@ export function TasksPage() {
               ))}
             </div>
           ) : null}
-          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,170px)_minmax(0,170px)_minmax(0,170px)_minmax(0,170px)_minmax(0,170px)_auto] xl:items-end">
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,220px)_minmax(0,170px)_minmax(0,170px)_minmax(0,170px)_minmax(0,170px)_auto] xl:items-end">
+            <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+              Lead search
+              <input
+                value={taskSearch}
+                onChange={(event) => {
+                  setTaskSearch(event.target.value);
+                  setPage(1);
+                }}
+                placeholder="Search title, lead, email, or phone"
+                className="rounded border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+              />
+            </label>
             <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
               Completion
               <select
                 value={completedFilter}
                 onChange={(event) => {
-                  setCompletedFilter(event.target.value as CompletedFilter);
+                  const nextCompletedFilter = event.target.value as CompletedFilter;
+                  setCompletedFilter(nextCompletedFilter);
+                  if (nextCompletedFilter !== 'open' && viewMode === 'kanban') {
+                    handleViewModeChange('table');
+                  }
                   setPage(1);
                 }}
                 className="rounded border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
@@ -1317,27 +1377,16 @@ export function TasksPage() {
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-              Record type
-              <select
-                value={entityTypeFilter}
-                onChange={(event) => {
-                  setEntityTypeFilter(event.target.value as EntityTypeFilter);
-                  setPage(1);
-                }}
-                className="rounded border border-gray-300 px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
-              >
-                <option value="all">All record types</option>
-                <option value="LEAD">Leads</option>
-                <option value="CONTACT">Contacts</option>
-                <option value="DEAL">Deals</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
               Status
               <select
                 value={statusFilter}
                 onChange={(event) => {
-                  setStatusFilter(event.target.value as StatusFilter);
+                  const nextStatusFilter = event.target.value as StatusFilter;
+                  setStatusFilter(nextStatusFilter);
+                  if (nextStatusFilter === 'DONE' && viewMode === 'kanban') {
+                    handleViewModeChange('table');
+                    setCompletedFilter('completed');
+                  }
                   setPage(1);
                 }}
                 className="rounded border border-gray-300 px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
@@ -1376,6 +1425,20 @@ export function TasksPage() {
               </button>
             </div>
           </div>
+          {hasActiveFilters(completedFilter, assigneeFilter, entityTypeFilter, statusFilter, dueBucketFilter) || taskSearch.trim() ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Active filters</span>
+              {taskSearch.trim() ? <FilterChip label={`Search: ${taskSearch.trim()}`} onRemove={() => setTaskSearch('')} /> : null}
+              {assigneeFilter !== DEFAULT_ASSIGNEE_FILTER ? (
+                <FilterChip label={assigneeFilter === 'all' ? 'Team tasks' : 'My tasks'} onRemove={() => setAssigneeFilter(DEFAULT_ASSIGNEE_FILTER)} />
+              ) : null}
+              {completedFilter !== DEFAULT_COMPLETED_FILTER ? (
+                <FilterChip label={completedFilter === 'completed' ? 'Completed' : completedFilter === 'all' ? 'Open and completed' : 'Open'} onRemove={() => setCompletedFilter(DEFAULT_COMPLETED_FILTER)} />
+              ) : null}
+              {statusFilter !== DEFAULT_STATUS_FILTER ? <FilterChip label={STATUS_LABELS[statusFilter as TaskStatus]} onRemove={() => setStatusFilter(DEFAULT_STATUS_FILTER)} /> : null}
+              {dueBucketFilter !== DEFAULT_DUE_BUCKET_FILTER ? <FilterChip label={SECTION_LABELS[dueBucketFilter as TaskDueBucket]} onRemove={() => setDueBucketFilter(DEFAULT_DUE_BUCKET_FILTER)} /> : null}
+            </div>
+          ) : null}
         </section>
 
         {tasksLoading ? <p className="rounded border border-gray-200 bg-white p-5 text-sm text-gray-700">Loading tasks...</p> : null}
@@ -1394,7 +1457,7 @@ export function TasksPage() {
           </div>
         ) : null}
 
-        {!tasksLoading && !tasksError && tasks.length === 0 && viewMode !== 'kanban' && viewMode !== 'calendar' ? (
+        {!tasksLoading && !tasksError && visibleTasks.length === 0 && viewMode !== 'kanban' && viewMode !== 'calendar' ? (
           <EmptyTasksState
             assigneeFilter={assigneeFilter}
             entityTypeFilter={entityTypeFilter}
@@ -1408,7 +1471,7 @@ export function TasksPage() {
           />
         ) : null}
 
-        {!tasksLoading && !tasksError && (tasks.length > 0 || viewMode === 'kanban' || viewMode === 'calendar') ? (
+        {!tasksLoading && !tasksError && (visibleTasks.length > 0 || viewMode === 'kanban' || viewMode === 'calendar') ? (
           <>
             {viewMode === 'daily' ? (
               <div className="space-y-5">
@@ -1416,22 +1479,34 @@ export function TasksPage() {
                   if (section.bucket === 'overdue' && section.tasks.length === 0) {
                     return null;
                   }
+                  const collapsible = section.bucket === 'upcoming' || section.bucket === 'no_due_date';
+                  const collapsed = Boolean(collapsedSections[section.bucket]);
 
                   return (
-                    <TaskSection key={section.bucket} label={section.label} bucket={section.bucket} tasks={section.tasks}>
-                      {section.tasks.map((task) => (
-                        <TaskCard
-                          key={task.id}
-                          task={task}
-                          contactsById={contactsById}
-                          dealsById={dealsById}
-                          leadsById={leadsById}
-                          membershipsByUserId={membershipsByUserId}
-                          accessToken={accessToken}
-                          onChanged={refreshTasks}
-                          onOpenTask={setSelectedTask}
-                        />
-                      ))}
+                    <TaskSection
+                      key={section.bucket}
+                      label={section.label}
+                      bucket={section.bucket}
+                      tasks={section.tasks}
+                      collapsed={collapsed}
+                      collapsible={collapsible}
+                      onToggleCollapsed={() => setCollapsedSections((current) => ({ ...current, [section.bucket]: !current[section.bucket] }))}
+                    >
+                      {!collapsed
+                        ? section.tasks.map((task) => (
+                            <TaskCard
+                              key={task.id}
+                              task={task}
+                              contactsById={contactsById}
+                              dealsById={dealsById}
+                              leadsById={leadsById}
+                              membershipsByUserId={membershipsByUserId}
+                              accessToken={accessToken}
+                              onChanged={refreshTasks}
+                              onOpenTask={setSelectedTask}
+                            />
+                          ))
+                        : null}
                     </TaskSection>
                   );
                 })}
@@ -1453,7 +1528,7 @@ export function TasksPage() {
               />
             ) : viewMode === 'calendar' ? (
               <TaskCalendarView
-                tasks={tasks}
+                tasks={visibleTasks}
                 currentMonth={calendarMonth}
                 contactsById={contactsById}
                 dealsById={dealsById}
@@ -1463,10 +1538,11 @@ export function TasksPage() {
                 onMonthChange={setCalendarMonth}
                 onChanged={refreshTasks}
                 onOpenTask={setSelectedTask}
+                onCreateTaskAt={openCreateFormAt}
               />
             ) : (
               <TaskKanbanView
-                tasks={tasks}
+                tasks={visibleTasks}
                 contactsById={contactsById}
                 dealsById={dealsById}
                 leadsById={leadsById}
@@ -1528,7 +1604,7 @@ type TaskViewSwitcherProps = {
 
 function TaskViewSwitcher({ viewMode, onChange }: TaskViewSwitcherProps) {
   const options: Array<{ value: TaskViewMode; label: string }> = [
-    { value: 'daily', label: 'Daily' },
+    { value: 'daily', label: 'My Day' },
     { value: 'table', label: 'Table' },
     { value: 'kanban', label: 'Kanban' },
     { value: 'calendar', label: 'Calendar' },
@@ -1558,6 +1634,19 @@ function TaskViewSwitcher({ viewMode, onChange }: TaskViewSwitcherProps) {
         })}
       </div>
     </section>
+  );
+}
+
+function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onRemove}
+      className="rounded-full border border-gray-300 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-white focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+      title={`Remove ${label}`}
+    >
+      {label} x
+    </button>
   );
 }
 
@@ -1631,8 +1720,7 @@ function TaskTableView({
           <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
             <tr>
               <th scope="col" className="px-4 py-3">Task</th>
-              <th scope="col" className="px-4 py-3">Record type</th>
-              <th scope="col" className="px-4 py-3">Record name</th>
+              <th scope="col" className="px-4 py-3">Lead</th>
               <th scope="col" className="px-4 py-3">Assignee</th>
               <th scope="col" className="px-4 py-3">Due date</th>
               <th scope="col" className="px-4 py-3">Due status</th>
@@ -1700,7 +1788,6 @@ function TaskTableRow({
 }: TaskTableItemProps) {
   const entityLabel = getTaskEntityLabel(task, contactsById, dealsById, leadsById);
   const entityPath = getTaskEntityPath(task);
-  const assigneeLabel = getTaskAssigneeLabel(task, membershipsByUserId);
   const dueStatus = getDueStatus(task);
   const completed = isTaskCompleted(task);
 
@@ -1708,23 +1795,23 @@ function TaskTableRow({
     <tr className={completed ? 'bg-gray-50 text-gray-600' : 'text-gray-900'}>
       <td className="max-w-xs px-4 py-3 align-top">
         <p className={completed ? 'font-medium text-gray-600' : 'font-medium text-gray-900'}>{task.title}</p>
-        {task.description ? <p className="mt-1 line-clamp-2 text-xs text-gray-500">{task.description}</p> : null}
-      </td>
-      <td className="px-4 py-3 align-top">
-        <span className={getEntityClassName(task.entityType)}>{ENTITY_LABELS[task.entityType]}</span>
       </td>
       <td className="max-w-xs px-4 py-3 align-top">
         <Link className="break-words font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-700" to={entityPath}>
           {entityLabel}
         </Link>
       </td>
-      <td className="px-4 py-3 align-top text-gray-700">{assigneeLabel}</td>
-      <td className="px-4 py-3 align-top text-gray-700">{formatDateTime(task.dueAt)}</td>
+      <td className="px-4 py-3 align-top text-gray-700">
+        <InlineTaskAssigneeControl task={task} membershipsByUserId={membershipsByUserId} accessToken={accessToken} onChanged={onChanged} />
+      </td>
+      <td className="min-w-52 px-4 py-3 align-top text-gray-700">
+        <InlineTaskDueControl task={task} accessToken={accessToken} onChanged={onChanged} />
+      </td>
       <td className="px-4 py-3 align-top">
         <span className={getDueClassName(dueStatus)}>{dueStatus.label}</span>
       </td>
       <td className="px-4 py-3 align-top">
-        <span className={getStatusClassName(task.status)}>{STATUS_LABELS[task.status]}</span>
+        <InlineTaskStatusControl task={task} accessToken={accessToken} onChanged={onChanged} />
       </td>
       <td className="px-4 py-3 align-top">
         <div className="flex justify-end gap-2">
@@ -1739,7 +1826,7 @@ function TaskTableRow({
             to={entityPath}
             className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
           >
-            Open
+            Open lead
           </Link>
           <TaskCompletionButton task={task} accessToken={accessToken} onChanged={onChanged} />
         </div>
@@ -1760,7 +1847,6 @@ function TaskTableMobileCard({
 }: TaskTableItemProps) {
   const entityLabel = getTaskEntityLabel(task, contactsById, dealsById, leadsById);
   const entityPath = getTaskEntityPath(task);
-  const assigneeLabel = getTaskAssigneeLabel(task, membershipsByUserId);
   const dueStatus = getDueStatus(task);
   const completed = isTaskCompleted(task);
 
@@ -1768,8 +1854,8 @@ function TaskTableMobileCard({
     <article className={completed ? 'rounded border border-gray-200 bg-gray-50 p-4 text-gray-700' : 'rounded border border-gray-200 bg-white p-4'}>
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className={getEntityClassName(task.entityType)}>{ENTITY_LABELS[task.entityType]}</span>
-          <span className={getStatusClassName(task.status)}>{STATUS_LABELS[task.status]}</span>
+          <span className={getEntityClassName(task.entityType)}>Lead</span>
+          <InlineTaskStatusControl task={task} accessToken={accessToken} onChanged={onChanged} />
         </div>
         <h3 className={completed ? 'text-base font-semibold text-gray-600' : 'text-base font-semibold text-gray-900'}>{task.title}</h3>
         <Link className="break-words text-sm font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-700" to={entityPath}>
@@ -1777,8 +1863,14 @@ function TaskTableMobileCard({
         </Link>
       </div>
       <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-        <TaskMeta label="Assignee" value={assigneeLabel} />
-        <TaskMeta label="Due date" value={formatDateTime(task.dueAt)} />
+        <div>
+          <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Assignee</dt>
+          <dd className="mt-1"><InlineTaskAssigneeControl task={task} membershipsByUserId={membershipsByUserId} accessToken={accessToken} onChanged={onChanged} /></dd>
+        </div>
+        <div>
+          <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Due date</dt>
+          <dd className="mt-1"><InlineTaskDueControl task={task} accessToken={accessToken} onChanged={onChanged} /></dd>
+        </div>
         <TaskMeta label="Due status" value={dueStatus.label} />
       </dl>
       <div className="mt-4 flex flex-col gap-2 sm:flex-row">
@@ -1793,7 +1885,7 @@ function TaskTableMobileCard({
           to={entityPath}
           className="rounded border border-gray-300 bg-white px-3 py-2 text-center text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
         >
-          Open {ENTITY_LABELS[task.entityType].toLowerCase()}
+          Open lead
         </Link>
         <TaskCompletionButton task={task} accessToken={accessToken} onChanged={onChanged} />
       </div>
@@ -1837,7 +1929,7 @@ function TaskCompletionButton({ task, accessToken, onChanged }: TaskCompletionBu
   };
 
   return (
-    <div>
+    <div onClick={(event) => event.stopPropagation()}>
       <button
         type="button"
         onClick={runAction}
@@ -1939,10 +2031,13 @@ type TaskSectionProps = {
   label: string;
   bucket: LocalDueBucket;
   tasks: Task[];
+  collapsible?: boolean;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
   children: ReactNode;
 };
 
-function TaskSection({ label, bucket, tasks, children }: TaskSectionProps) {
+function TaskSection({ label, bucket, tasks, collapsible = false, collapsed = false, onToggleCollapsed, children }: TaskSectionProps) {
   const helperText = getSectionHelper(bucket, tasks.length);
 
   return (
@@ -1954,10 +2049,193 @@ function TaskSection({ label, bucket, tasks, children }: TaskSectionProps) {
           </h2>
           <p className="mt-1 text-sm text-gray-600">{helperText}</p>
         </div>
-        <span className="w-fit rounded bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700">{tasks.length}</span>
+        <div className="flex items-center gap-2">
+          <span className="w-fit rounded bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700">{tasks.length}</span>
+          {collapsible ? (
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              className="rounded border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+            >
+              {collapsed ? 'Expand' : 'Collapse'}
+            </button>
+          ) : null}
+        </div>
       </div>
-      {tasks.length > 0 ? children : <p className="rounded border border-gray-200 bg-white p-4 text-sm text-gray-600">{helperText}</p>}
+      {collapsed ? null : tasks.length > 0 ? children : <p className="rounded border border-gray-200 bg-white p-4 text-sm text-gray-600">{helperText}</p>}
     </section>
+  );
+}
+
+function getCompactSelectClassName(status?: TaskStatus) {
+  const tone = status ? getStatusClassName(status) : 'rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700';
+  return `${tone} max-w-36 border-0 pr-6 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`;
+}
+
+function InlineTaskStatusControl({
+  task,
+  accessToken,
+  onChanged,
+}: {
+  task: Task;
+  accessToken: string | null;
+  onChanged: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleChange = async (nextStatus: TaskStatus) => {
+    if (nextStatus === task.status || saving) {
+      return;
+    }
+
+    if (!accessToken) {
+      setError('Sign in before updating tasks.');
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      await updateTask(accessToken, task.id, { status: nextStatus });
+      onChanged();
+    } catch (requestError) {
+      setError(getTaskActionError(requestError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1" onClick={(event) => event.stopPropagation()}>
+      <select
+        value={task.status}
+        onChange={(event) => void handleChange(event.target.value as TaskStatus)}
+        disabled={saving}
+        aria-label={`Change status for ${task.title}`}
+        className={getCompactSelectClassName(task.status)}
+      >
+        {Object.entries(STATUS_LABELS).map(([value, label]) => (
+          <option key={value} value={value}>
+            {saving && value === task.status ? 'Saving...' : label}
+          </option>
+        ))}
+      </select>
+      {error ? <p className="max-w-40 text-xs text-red-700">{error}</p> : null}
+    </div>
+  );
+}
+
+function InlineTaskAssigneeControl({
+  task,
+  membershipsByUserId,
+  accessToken,
+  onChanged,
+}: {
+  task: Task;
+  membershipsByUserId: Map<string, MembershipOption>;
+  accessToken: string | null;
+  onChanged: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const memberships = Array.from(membershipsByUserId.values());
+
+  const handleChange = async (nextAssigneeId: string) => {
+    const normalizedAssigneeId = nextAssigneeId || null;
+    if (normalizedAssigneeId === task.assigneeId || saving) {
+      return;
+    }
+
+    if (!accessToken) {
+      setError('Sign in before updating tasks.');
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      await updateTask(accessToken, task.id, { assigneeId: normalizedAssigneeId });
+      onChanged();
+    } catch (requestError) {
+      setError(getTaskActionError(requestError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1" onClick={(event) => event.stopPropagation()}>
+      <select
+        value={task.assigneeId ?? ''}
+        onChange={(event) => void handleChange(event.target.value)}
+        disabled={saving}
+        aria-label={`Change assignee for ${task.title}`}
+        className="max-w-40 rounded-full border-0 bg-gray-100 px-2 py-0.5 pr-6 text-xs font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <option value="">{saving ? 'Saving...' : 'Unassigned'}</option>
+        {memberships.map((membership) => (
+          <option key={membership.id} value={membership.userId}>
+            {getMembershipName(membership)}
+          </option>
+        ))}
+      </select>
+      {error ? <p className="max-w-40 text-xs text-red-700">{error}</p> : null}
+    </div>
+  );
+}
+
+function InlineTaskDueControl({ task, accessToken, onChanged }: { task: Task; accessToken: string | null; onChanged: () => void }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [value, setValue] = useState(() => toLocalDateTimeInput(task.dueAt));
+
+  useEffect(() => {
+    setValue(toLocalDateTimeInput(task.dueAt));
+  }, [task.dueAt]);
+
+  const handleBlur = async () => {
+    const nextDueAt = value ? new Date(value).toISOString() : null;
+    if ((task.dueAt ?? null) === nextDueAt || saving) {
+      return;
+    }
+
+    if (!accessToken) {
+      setError('Sign in before updating tasks.');
+      setValue(toLocalDateTimeInput(task.dueAt));
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      await updateTask(accessToken, task.id, { dueAt: nextDueAt });
+      onChanged();
+    } catch (requestError) {
+      setValue(toLocalDateTimeInput(task.dueAt));
+      setError(getTaskActionError(requestError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1" onClick={(event) => event.stopPropagation()}>
+      <input
+        type="datetime-local"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onBlur={() => void handleBlur()}
+        disabled={saving}
+        aria-label={`Change due date for ${task.title}`}
+        className="w-44 rounded-full border-0 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+      />
+      {saving ? <p className="text-xs text-gray-500">Saving...</p> : null}
+      {error ? <p className="max-w-44 text-xs text-red-700">{error}</p> : null}
+    </div>
   );
 }
 
@@ -1995,7 +2273,7 @@ function TaskCard({ task, contactsById, dealsById, leadsById, membershipsByUserI
     task.entityType === 'LEAD'
       ? [task.entitySummary?.temperature, task.entitySummary?.status].filter(Boolean).join(' / ')
       : '';
-  const openRecordLabel = `Open ${ENTITY_LABELS[task.entityType].toLowerCase()}`;
+  const openRecordLabel = 'Open lead';
 
   const runAction = async () => {
     if (!accessToken) {
@@ -2052,7 +2330,7 @@ function TaskCard({ task, contactsById, dealsById, leadsById, membershipsByUserI
           <div className="space-y-2">
             <h3 className={titleClassName}>{task.title}</h3>
             <div className="flex flex-wrap items-center gap-2">
-              <span className={entityClassName}>{ENTITY_LABELS[task.entityType]}</span>
+              <span className={entityClassName}>Lead</span>
               <Link className={completed ? 'break-words text-sm text-gray-600 underline decoration-gray-300 underline-offset-2 hover:text-gray-700' : 'break-words text-sm font-medium text-gray-800 underline decoration-gray-300 underline-offset-2 hover:text-gray-700'} to={entityPath}>
                 {entityLabel}
               </Link>
@@ -2064,6 +2342,11 @@ function TaskCard({ task, contactsById, dealsById, leadsById, membershipsByUserI
               <span className={completed ? 'text-sm text-gray-600' : 'text-sm text-gray-700'}>Assigned to {assigneeLabel}</span>
             </div>
             {leadContext ? <p className={completed ? 'text-sm text-gray-600' : 'text-sm text-gray-700'}>Lead context: {leadContext}</p> : null}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <InlineTaskStatusControl task={task} accessToken={accessToken} onChanged={onChanged} />
+              <InlineTaskDueControl task={task} accessToken={accessToken} onChanged={onChanged} />
+              <InlineTaskAssigneeControl task={task} membershipsByUserId={membershipsByUserId} accessToken={accessToken} onChanged={onChanged} />
+            </div>
           </div>
           {task.description ? (
             <p className={completed ? 'mt-3 whitespace-pre-wrap text-sm text-gray-500' : 'mt-3 whitespace-pre-wrap text-sm text-gray-700'} style={{ maxHeight: '3.75rem', overflow: 'hidden' }}>

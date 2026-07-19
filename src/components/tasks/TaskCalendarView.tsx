@@ -11,6 +11,13 @@ import {
 } from '@dnd-kit/core';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import {
+  addLocalDays,
+  formatWeekRangeLabel,
+  getLocalDayKey,
+  getLocalDayStart,
+  getLocalWeekDays,
+} from '../../lib/calendar-date-helpers';
 import type { Contact } from '../../lib/contacts';
 import type { Deal } from '../../lib/deals';
 import type { Lead } from '../../lib/leads';
@@ -34,6 +41,8 @@ const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DEFAULT_RESCHEDULE_HOUR = 9;
 const DAY_KEY_PREFIX = 'calendar-day:';
 const VISIBLE_TASKS_PER_DAY = 3;
+const NO_DUE_DATE_PANEL_STORAGE_KEY = 'alozix.tasks.calendar.noDueDatePanel';
+type CalendarViewMode = 'month' | 'week' | 'agenda';
 
 function getContactOptionName(contact: Contact) {
   return [contact.firstName, contact.lastName].filter(Boolean).join(' ') || contact.email || contact.phone || 'Unnamed contact';
@@ -51,19 +60,16 @@ function getMembershipName(membership: MembershipOption) {
   return [membership.user.firstName, membership.user.lastName].filter(Boolean).join(' ') || membership.user.email;
 }
 
-function getLocalDayStart(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function getLocalDayKey(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 function formatMonthLabel(date: Date) {
   return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(date);
+}
+
+function formatCalendarHeader(date: Date, viewMode: CalendarViewMode) {
+  if (viewMode === 'week') {
+    return formatWeekRangeLabel(date);
+  }
+
+  return formatMonthLabel(date);
 }
 
 function formatDayLabel(date: Date) {
@@ -217,6 +223,27 @@ function sortCalendarTasks(tasks: Task[]) {
   });
 }
 
+function getInitialNoDueDatePanelCollapsed() {
+  if (typeof window === 'undefined') {
+    return true;
+  }
+
+  const storedPreference = window.localStorage.getItem(NO_DUE_DATE_PANEL_STORAGE_KEY);
+  if (storedPreference === 'collapsed') {
+    return true;
+  }
+
+  if (storedPreference === 'expanded') {
+    return false;
+  }
+
+  return window.matchMedia('(max-width: 1023px)').matches;
+}
+
+function hasStoredNoDueDatePanelPreference() {
+  return typeof window !== 'undefined' && window.localStorage.getItem(NO_DUE_DATE_PANEL_STORAGE_KEY) !== null;
+}
+
 function buildRescheduledDueAt(task: Task, targetDayKey: string) {
   const [year, month, day] = targetDayKey.split('-').map(Number);
   const previousDueAt = task.dueAt ? new Date(task.dueAt) : null;
@@ -241,6 +268,7 @@ type TaskCalendarViewProps = {
   onMonthChange: (month: Date) => void;
   onChanged: () => void;
   onOpenTask: (task: Task) => void;
+  onCreateTaskAt?: (date: Date) => void;
 };
 
 export function TaskCalendarView({
@@ -254,10 +282,14 @@ export function TaskCalendarView({
   onMonthChange,
   onChanged,
   onOpenTask,
+  onCreateTaskAt,
 }: TaskCalendarViewProps) {
   const [localTasks, setLocalTasks] = useState(tasks);
+  const [calendarViewMode, setCalendarViewMode] = useState<CalendarViewMode>('month');
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
   const [expandedDayKey, setExpandedDayKey] = useState<string | null>(null);
+  const [noDueDatePanelCollapsed, setNoDueDatePanelCollapsed] = useState(getInitialNoDueDatePanelCollapsed);
+  const [hasNoDueDatePanelPreference, setHasNoDueDatePanelPreference] = useState(hasStoredNoDueDatePanelPreference);
   const [actionError, setActionError] = useState<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
 
@@ -266,8 +298,23 @@ export function TaskCalendarView({
   }, [tasks]);
 
   const gridDays = useMemo(() => getMonthGridDays(currentMonth), [currentMonth]);
+  const weekDays = useMemo(() => getLocalWeekDays(currentMonth), [currentMonth]);
   const todayKey = getLocalDayKey(new Date());
   const noDueDateTasks = useMemo(() => sortCalendarTasks(localTasks.filter((task) => !task.dueAt)), [localTasks]);
+  useEffect(() => {
+    if (hasNoDueDatePanelPreference) {
+      return;
+    }
+
+    if (noDueDateTasks.length === 0) {
+      setNoDueDatePanelCollapsed(true);
+      return;
+    }
+
+    if (typeof window !== 'undefined' && !window.matchMedia('(max-width: 1023px)').matches) {
+      setNoDueDatePanelCollapsed(false);
+    }
+  }, [hasNoDueDatePanelPreference, noDueDateTasks.length]);
   const tasksByDay = useMemo(() => {
     const groups = new Map<string, Task[]>();
 
@@ -340,26 +387,65 @@ export function TaskCalendarView({
     }
   };
 
+  const handleNoDueDatePanelToggle = () => {
+    setNoDueDatePanelCollapsed((current) => {
+      const nextCollapsed = !current;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(NO_DUE_DATE_PANEL_STORAGE_KEY, nextCollapsed ? 'collapsed' : 'expanded');
+      }
+      return nextCollapsed;
+    });
+    setHasNoDueDatePanelPreference(true);
+  };
+
   return (
     <section className="space-y-4">
       <div className="flex flex-col gap-3 rounded border border-gray-200 bg-white p-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-base font-semibold text-gray-900">{formatMonthLabel(currentMonth)}</h2>
+          <h2 className="text-base font-semibold text-gray-900">{formatCalendarHeader(currentMonth, calendarViewMode)}</h2>
           <p className="mt-1 text-sm text-gray-600">
             {overdueTasks.length > 0 ? `${overdueTasks.length} overdue ${overdueTasks.length === 1 ? 'task' : 'tasks'} in this view.` : 'No overdue tasks in this view.'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <CalendarNavButton onClick={() => onMonthChange(getNextMonth(currentMonth, -1))}>Previous</CalendarNavButton>
-          <CalendarNavButton onClick={() => onMonthChange(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}>Today</CalendarNavButton>
-          <CalendarNavButton onClick={() => onMonthChange(getNextMonth(currentMonth, 1))}>Next</CalendarNavButton>
+          <div className="flex rounded border border-gray-300 bg-white p-0.5">
+            {(['month', 'week', 'agenda'] as CalendarViewMode[]).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setCalendarViewMode(mode)}
+                className={
+                  calendarViewMode === mode
+                    ? 'rounded bg-gray-900 px-3 py-1.5 text-sm font-medium capitalize text-white focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2'
+                    : 'rounded px-3 py-1.5 text-sm font-medium capitalize text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2'
+                }
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+          <CalendarNavButton onClick={() => onMonthChange(calendarViewMode === 'week' ? addLocalDays(currentMonth, -7) : getNextMonth(currentMonth, -1))}>Previous</CalendarNavButton>
+          <CalendarNavButton onClick={() => onMonthChange(new Date())}>Today</CalendarNavButton>
+          <CalendarNavButton onClick={() => onMonthChange(calendarViewMode === 'week' ? addLocalDays(currentMonth, 7) : getNextMonth(currentMonth, 1))}>Next</CalendarNavButton>
         </div>
       </div>
 
       {actionError ? <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{actionError}</div> : null}
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className={noDueDatePanelCollapsed ? 'grid gap-4' : 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]'}>
+          {calendarViewMode === 'agenda' ? (
+            <CalendarAgendaList
+              days={gridDays.filter((day) => day.getMonth() === currentMonth.getMonth())}
+              tasksByDay={tasksByDay}
+              contactsById={contactsById}
+              dealsById={dealsById}
+              leadsById={leadsById}
+              membershipsByUserId={membershipsByUserId}
+              savingTaskId={savingTaskId}
+              onOpenTask={onOpenTask}
+            />
+          ) : (
           <div className="hidden overflow-x-auto rounded border border-gray-200 bg-white lg:block">
             <div className="grid min-w-[1050px] grid-cols-7 border-b border-gray-200 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
               {WEEKDAY_LABELS.map((weekday) => (
@@ -367,7 +453,7 @@ export function TaskCalendarView({
               ))}
             </div>
             <div className="grid min-w-[1050px] grid-cols-7">
-              {gridDays.map((day) => {
+              {(calendarViewMode === 'week' ? weekDays : gridDays).map((day) => {
                 const dayKey = getLocalDayKey(day);
                 const dayTasks = tasksByDay.get(dayKey) ?? [];
                 const visibleTasks = expandedDayKey === dayKey ? dayTasks : dayTasks.slice(0, VISIBLE_TASKS_PER_DAY);
@@ -389,11 +475,13 @@ export function TaskCalendarView({
                     membershipsByUserId={membershipsByUserId}
                     onToggleExpanded={() => setExpandedDayKey((current) => (current === dayKey ? null : dayKey))}
                     onOpenTask={onOpenTask}
+                    onCreateTaskAt={onCreateTaskAt}
                   />
                 );
               })}
             </div>
           </div>
+          )}
           <MobileCalendarAgenda
             gridDays={gridDays}
             tasksByDay={tasksByDay}
@@ -414,6 +502,8 @@ export function TaskCalendarView({
             membershipsByUserId={membershipsByUserId}
             savingTaskId={savingTaskId}
             onOpenTask={onOpenTask}
+            collapsed={noDueDatePanelCollapsed}
+            onToggleCollapsed={handleNoDueDatePanelToggle}
           />
         </div>
       </DndContext>
@@ -457,6 +547,7 @@ function TaskCalendarDayCell({
   membershipsByUserId,
   onToggleExpanded,
   onOpenTask,
+  onCreateTaskAt,
 }: {
   day: Date;
   dayKey: string;
@@ -471,6 +562,7 @@ function TaskCalendarDayCell({
   membershipsByUserId: Map<string, MembershipOption>;
   onToggleExpanded: () => void;
   onOpenTask: (task: Task) => void;
+  onCreateTaskAt?: (date: Date) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `${DAY_KEY_PREFIX}${dayKey}` });
 
@@ -519,8 +611,74 @@ function TaskCalendarDayCell({
             +{hiddenCount} more
           </button>
         ) : null}
+        {tasks.length === 0 && onCreateTaskAt ? (
+          <button
+            type="button"
+            onClick={() => onCreateTaskAt(day)}
+            className="rounded border border-dashed border-gray-300 px-2 py-1 text-left text-xs font-medium text-gray-500 hover:border-gray-500 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+          >
+            Add task
+          </button>
+        ) : null}
       </div>
     </section>
+  );
+}
+
+function CalendarAgendaList({
+  days,
+  tasksByDay,
+  contactsById,
+  dealsById,
+  leadsById,
+  membershipsByUserId,
+  savingTaskId,
+  onOpenTask,
+}: {
+  days: Date[];
+  tasksByDay: Map<string, Task[]>;
+  contactsById: Map<string, Contact>;
+  dealsById: Map<string, Deal>;
+  leadsById: Map<string, Lead>;
+  membershipsByUserId: Map<string, MembershipOption>;
+  savingTaskId: string | null;
+  onOpenTask: (task: Task) => void;
+}) {
+  const daysWithTasks = days.filter((day) => (tasksByDay.get(getLocalDayKey(day)) ?? []).length > 0);
+
+  return (
+    <div className="rounded border border-gray-200 bg-white p-4">
+      <div className="space-y-3">
+        {daysWithTasks.length > 0 ? (
+          daysWithTasks.map((day) => {
+            const dayKey = getLocalDayKey(day);
+            const dayTasks = tasksByDay.get(dayKey) ?? [];
+
+            return (
+              <section key={dayKey} className="border-b border-gray-100 pb-3 last:border-b-0 last:pb-0">
+                <h3 className="text-sm font-semibold text-gray-900">{formatDayLabel(day)}</h3>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  {dayTasks.map((task) => (
+                    <MobileCalendarTask
+                      key={task.id}
+                      task={task}
+                      contactsById={contactsById}
+                      dealsById={dealsById}
+                      leadsById={leadsById}
+                      membershipsByUserId={membershipsByUserId}
+                      saving={savingTaskId === task.id}
+                      onOpenTask={onOpenTask}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })
+        ) : (
+          <p className="rounded border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">No dated tasks in this agenda.</p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -674,6 +832,8 @@ function NoDueDatePanel({
   membershipsByUserId,
   savingTaskId,
   onOpenTask,
+  collapsed,
+  onToggleCollapsed,
 }: {
   tasks: Task[];
   contactsById: Map<string, Contact>;
@@ -682,34 +842,63 @@ function NoDueDatePanel({
   membershipsByUserId: Map<string, MembershipOption>;
   savingTaskId: string | null;
   onOpenTask: (task: Task) => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }) {
+  const panelContentId = 'task-calendar-no-due-date-panel';
+
   return (
-    <aside className="rounded border border-gray-200 bg-white p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-gray-900">No due date</h3>
-          <p className="mt-1 text-sm text-gray-600">Drag these onto a day on desktop or open the task to set a date.</p>
-        </div>
-        <span className="rounded bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700">{tasks.length}</span>
-      </div>
-      <div className="mt-3 space-y-2">
-        {tasks.length > 0 ? (
-          tasks.map((task) => (
-            <CalendarTaskCard
-              key={task.id}
-              task={task}
-              contactsById={contactsById}
-              dealsById={dealsById}
-              leadsById={leadsById}
-              membershipsByUserId={membershipsByUserId}
-              saving={savingTaskId === task.id}
-              onOpenTask={onOpenTask}
+    <aside className="rounded border border-gray-200 bg-white">
+      <button
+        type="button"
+        onClick={onToggleCollapsed}
+        aria-expanded={!collapsed}
+        aria-controls={panelContentId}
+        className="flex w-full items-center justify-between gap-3 rounded px-4 py-3 text-left hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+      >
+        <span className="min-w-0">
+          <span className="block text-sm font-semibold text-gray-900">No due date</span>
+          <span className="mt-0.5 block text-xs text-gray-600">{tasks.length === 1 ? '1 unscheduled task' : `${tasks.length} unscheduled tasks`}</span>
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="rounded bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700">{tasks.length}</span>
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 20 20"
+            className={['h-4 w-4 text-gray-500 transition-transform', collapsed ? '' : 'rotate-180'].join(' ')}
+            fill="currentColor"
+          >
+            <path
+              fillRule="evenodd"
+              d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z"
+              clipRule="evenodd"
             />
-          ))
-        ) : (
-          <p className="rounded border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-600">No unscheduled tasks in this view.</p>
-        )}
-      </div>
+          </svg>
+        </span>
+      </button>
+      {!collapsed ? (
+        <div id={panelContentId} className="border-t border-gray-200 p-4">
+          <p className="text-sm text-gray-600">Drag these onto a day on desktop or open the task to set a date.</p>
+          <div className="mt-3 space-y-2">
+            {tasks.length > 0 ? (
+              tasks.map((task) => (
+                <CalendarTaskCard
+                  key={task.id}
+                  task={task}
+                  contactsById={contactsById}
+                  dealsById={dealsById}
+                  leadsById={leadsById}
+                  membershipsByUserId={membershipsByUserId}
+                  saving={savingTaskId === task.id}
+                  onOpenTask={onOpenTask}
+                />
+              ))
+            ) : (
+              <p className="rounded border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-600">No unscheduled tasks in this view.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
     </aside>
   );
 }

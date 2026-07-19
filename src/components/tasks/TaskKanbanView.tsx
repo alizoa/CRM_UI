@@ -41,7 +41,6 @@ const KANBAN_COLUMNS: Array<{ status: TaskStatus; helper: string }> = [
   { status: 'TODO', helper: 'Tasks not started yet.' },
   { status: 'IN_PROGRESS', helper: 'Tasks being worked on.' },
   { status: 'WAITING', helper: 'Waiting for customer, approval, or response.' },
-  { status: 'DONE', helper: 'Completed tasks.' },
 ];
 
 function getContactOptionName(contact: Contact) {
@@ -158,15 +157,9 @@ function getDueClassName(dueStatus: DueStatus) {
 }
 
 function getEntityClassName(entityType: EntityType) {
-  if (entityType === 'LEAD') {
-    return 'rounded bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700';
-  }
-
-  if (entityType === 'DEAL') {
-    return 'rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700';
-  }
-
-  return 'rounded bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700';
+  return entityType === 'LEAD'
+    ? 'rounded bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700'
+    : 'hidden';
 }
 
 function getTaskEntityPath(task: Task) {
@@ -304,6 +297,9 @@ export function TaskKanbanView({
     }
 
     for (const task of localTasks) {
+      if (!KANBAN_COLUMNS.some((column) => column.status === task.status)) {
+        continue;
+      }
       groups.set(task.status, [...(groups.get(task.status) ?? []), task]);
     }
 
@@ -353,7 +349,7 @@ export function TaskKanbanView({
       ) : null}
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <div className="overflow-x-auto pb-2">
-          <div className="grid min-w-[1120px] grid-cols-4 gap-4">
+          <div className="grid min-w-[840px] grid-cols-3 gap-4">
             {KANBAN_COLUMNS.map((column) => (
               <TaskKanbanColumn
                 key={column.status}
@@ -505,7 +501,7 @@ function TaskKanbanCard({
         <h3 className="text-sm font-semibold text-gray-900">{task.title}</h3>
       </button>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <span className={getEntityClassName(task.entityType)}>{ENTITY_LABELS[task.entityType]}</span>
+        <span className={getEntityClassName(task.entityType)}>Lead</span>
         <Link className="break-words text-sm font-medium text-gray-800 underline decoration-gray-300 underline-offset-2 hover:text-gray-700" to={entityPath}>
           {entityLabel}
         </Link>
@@ -515,20 +511,15 @@ function TaskKanbanCard({
         <span className="text-sm text-gray-600">Assigned to {assigneeLabel}</span>
       </div>
       {task.description ? <p className="mt-2 line-clamp-2 whitespace-pre-wrap text-sm text-gray-600">{task.description}</p> : null}
-      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <TaskKanbanStatusSelect task={task} accessToken={accessToken} onChanged={onChanged} />
         <button
           type="button"
           onClick={() => onOpenTask(task)}
-          className="rounded border border-gray-300 bg-white px-3 py-1.5 text-center text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+          className="rounded border border-gray-300 bg-white px-3 py-1.5 text-center text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
         >
           Details
         </button>
-        <Link
-          to={entityPath}
-          className="rounded border border-gray-300 bg-white px-3 py-1.5 text-center text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
-        >
-          Open {ENTITY_LABELS[task.entityType].toLowerCase()}
-        </Link>
         <TaskCompletionButton task={task} accessToken={accessToken} onChanged={onChanged} />
       </div>
     </article>
@@ -540,6 +531,53 @@ type TaskCompletionButtonProps = {
   accessToken: string | null;
   onChanged: () => void;
 };
+
+function TaskKanbanStatusSelect({ task, accessToken, onChanged }: TaskCompletionButtonProps) {
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const runAction = async (nextStatus: TaskStatus) => {
+    if (nextStatus === task.status || actionLoading) {
+      return;
+    }
+
+    if (!accessToken) {
+      setActionError('You need to sign in before updating tasks.');
+      return;
+    }
+
+    setActionLoading(true);
+    setActionError(null);
+
+    try {
+      await updateTaskStatus(accessToken, task.id, nextStatus);
+      onChanged();
+    } catch (requestError) {
+      setActionError(getTaskActionError(requestError));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1" onClick={(event) => event.stopPropagation()}>
+      <select
+        value={task.status}
+        onChange={(event) => void runAction(event.target.value as TaskStatus)}
+        disabled={actionLoading}
+        aria-label={`Change status for ${task.title}`}
+        className="rounded-full border-0 bg-gray-100 px-2 py-1 pr-6 text-xs font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {KANBAN_COLUMNS.map((column) => (
+          <option key={column.status} value={column.status}>
+            {STATUS_LABELS[column.status]}
+          </option>
+        ))}
+      </select>
+      {actionError ? <p className="max-w-44 text-xs text-red-700">{actionError}</p> : null}
+    </div>
+  );
+}
 
 function TaskCompletionButton({ task, accessToken, onChanged }: TaskCompletionButtonProps) {
   const [actionLoading, setActionLoading] = useState(false);
@@ -579,10 +617,10 @@ function TaskCompletionButton({ task, accessToken, onChanged }: TaskCompletionBu
         className={
           completed
             ? 'w-full rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-gray-400'
-            : 'w-full rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-gray-400'
+            : 'w-full rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-gray-400'
         }
       >
-        {actionLoading ? 'Updating...' : completed ? 'Reopen' : 'Complete'}
+        {actionLoading ? 'Updating...' : completed ? 'Reopen' : 'Mark Done'}
       </button>
       {actionError ? <p className="mt-2 text-sm text-red-700">{actionError}</p> : null}
     </div>

@@ -35,12 +35,6 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
   DONE: 'Done',
 };
 
-const ENTITY_LABELS: Record<Task['entityType'], string> = {
-  LEAD: 'Lead',
-  CONTACT: 'Contact',
-  DEAL: 'Deal',
-};
-
 const COMMENT_LIMIT = 20;
 
 function toRequestError(error: unknown, fallback: string): RequestError {
@@ -268,6 +262,33 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, on
     }
   };
 
+  const handleCompletionToggle = async () => {
+    if (!accessToken) {
+      setSaveError({ status: 401, message: 'You need to sign in before updating tasks.' });
+      return;
+    }
+
+    const nextStatus: TaskStatus = task.status === 'DONE' ? 'TODO' : 'DONE';
+    setSaveLoading(true);
+    setSaveError(null);
+    setSaveSuccess(null);
+
+    try {
+      const updatedTask = await updateTask(accessToken, task.id, { status: nextStatus });
+      setForm(buildInitialForm(updatedTask));
+      setSaveSuccess(nextStatus === 'DONE' ? 'Task completed.' : 'Task reopened.');
+      onSaved(updatedTask);
+    } catch (error) {
+      const requestError = toRequestError(error, 'Could not update task.');
+      setSaveError({
+        status: requestError.status,
+        message: requestError.status === 403 ? 'You do not have permission to update tasks.' : requestError.message,
+      });
+    } finally {
+      setSaveLoading(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-gray-900/50 p-4">
       <div className="mx-auto my-6 max-w-5xl rounded border border-gray-200 bg-white shadow-xl">
@@ -276,7 +297,7 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, on
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Task detail</p>
             <h2 className="mt-1 text-xl font-semibold text-gray-900">{task.title}</h2>
             <p className="mt-1 text-sm text-gray-600">
-              {ENTITY_LABELS[task.entityType]}:{' '}
+              Lead:{' '}
               <Link className="font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-700" to={entityPath}>
                 {entityLabel}
               </Link>
@@ -372,12 +393,10 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, on
             </div>
 
             <div className="rounded border border-gray-200 bg-gray-50 p-4">
-              <h3 className="text-sm font-semibold text-gray-900">Linked record</h3>
-              <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-                <TaskMeta label="Type" value={ENTITY_LABELS[task.entityType]} />
-                <TaskMeta label="Name" value={entityLabel} />
-                <TaskMeta label="ID" value={task.entityId} />
-              </dl>
+              <h3 className="text-sm font-semibold text-gray-900">Linked lead</h3>
+              <Link className="mt-2 inline-block text-sm font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-700" to={entityPath}>
+                {entityLabel}
+              </Link>
             </div>
 
             {saveSuccess ? <p className="rounded border border-green-200 bg-green-50 p-3 text-sm text-green-800">{saveSuccess}</p> : null}
@@ -402,6 +421,18 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, on
                 className="rounded border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-gray-400"
               >
                 Reset
+              </button>
+              <button
+                type="button"
+                onClick={handleCompletionToggle}
+                disabled={saveLoading}
+                className={
+                  task.status === 'DONE'
+                    ? 'rounded border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-gray-400'
+                    : 'rounded bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-800 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-gray-400'
+                }
+              >
+                {saveLoading ? 'Updating...' : task.status === 'DONE' ? 'Reopen task' : 'Complete task'}
               </button>
             </div>
           </form>

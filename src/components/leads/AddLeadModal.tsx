@@ -24,7 +24,6 @@ type FormState = {
   source: LeadSourceChannel;
   leadSourceId: string;
   ownerId: string;
-  nextFollowUpAt: string;
   temperature: LeadTemperature | '';
 };
 
@@ -36,7 +35,6 @@ const INITIAL_FORM: FormState = {
   source: 'MANUAL',
   leadSourceId: '',
   ownerId: '',
-  nextFollowUpAt: '',
   temperature: '',
 };
 
@@ -92,9 +90,6 @@ export function AddLeadModal({
       source: form.source,
       ...(form.leadSourceId ? { leadSourceId: form.leadSourceId } : {}),
       ...(form.ownerId ? { ownerId: form.ownerId } : {}),
-      ...(form.nextFollowUpAt
-        ? { nextFollowUpAt: new Date(form.nextFollowUpAt).toISOString() }
-        : {}),
       ...(form.temperature ? { temperature: form.temperature } : {}),
     };
 
@@ -183,10 +178,6 @@ export function AddLeadModal({
                   </select>
                 </label>
               ) : null}
-              <label className="block text-sm font-medium text-gray-700 sm:col-span-2">
-                Next follow-up
-                <input type="datetime-local" value={form.nextFollowUpAt} onChange={(event) => setForm((current) => ({ ...current, nextFollowUpAt: event.target.value }))} className={inputClass} />
-              </label>
             </div>
           ) : null}
 

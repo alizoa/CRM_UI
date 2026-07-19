@@ -2,12 +2,15 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   createLead as createLeadRequest,
   listLeads,
+  updateLead as updateLeadRequest,
   type CreateLeadInput,
   type Lead,
   type LeadFilters,
   type LeadsResponse,
+  type UpdateLeadInput,
 } from '../lib/leads';
 import type { HttpError } from '../lib/http';
+import { subscribeToTaskChanges } from '../lib/tasks';
 
 type RequestError = {
   status: number;
@@ -77,9 +80,42 @@ export function useLeads(token: string | null, filters: LeadFilters = {}) {
     }
   }, [refetch, token]);
 
+  const updateLead = useCallback(async (id: string, input: UpdateLeadInput): Promise<Lead | null> => {
+    if (!token) {
+      setCreateError({ status: 401, message: 'You need to sign in before updating a lead.' });
+      return null;
+    }
+
+    try {
+      const updatedLead = await updateLeadRequest(token, id, input);
+      setData((current) => {
+        if (!current) return current;
+        const shouldKeep = filters.status
+          ? updatedLead.status === filters.status
+          : ['NEW', 'CONTACTED', 'FOLLOW_UP_NEEDED', 'QUALIFIED'].includes(updatedLead.status);
+        const exists = current.data.some((lead) => lead.id === id);
+        const nextData = shouldKeep
+          ? exists
+            ? current.data.map((lead) => (lead.id === id ? updatedLead : lead))
+            : current.data
+          : current.data.filter((lead) => lead.id !== id);
+        const total = exists && !shouldKeep ? Math.max(0, current.total - 1) : current.total;
+
+        return { ...current, data: nextData, total };
+      });
+      return updatedLead;
+    } catch (requestError) {
+      throw toRequestError(requestError, 'Could not update lead.');
+    }
+  }, [filters.status, token]);
+
   useEffect(() => {
     void refetch();
   }, [refetch]);
+
+  useEffect(() => subscribeToTaskChanges(() => {
+    void refetch();
+  }), [refetch]);
 
   return {
     leads: data?.data ?? [],
@@ -88,6 +124,7 @@ export function useLeads(token: string | null, filters: LeadFilters = {}) {
     error,
     refetch,
     createLead,
+    updateLead,
     createLoading,
     createError,
   };
