@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -46,6 +46,50 @@ type RequestError = {
   message: string;
 };
 
+type SettingsSection = 'general' | 'leads' | 'channels' | 'templates';
+type LeadSettingsSubsection = 'sources' | 'tags';
+type ChannelSettingsSubsection = 'overview' | 'whatsapp' | 'website';
+
+const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
+  { id: 'general', label: 'General' },
+  { id: 'leads', label: 'Lead Management' },
+  { id: 'channels', label: 'Channels' },
+  { id: 'templates', label: 'Templates' },
+];
+
+const LEAD_SETTINGS_SUBSECTIONS: Array<{ id: LeadSettingsSubsection; label: string }> = [
+  { id: 'sources', label: 'Lead Sources' },
+  { id: 'tags', label: 'Tags' },
+];
+
+const CHANNEL_SETTINGS_SUBSECTIONS: Array<{ id: ChannelSettingsSubsection; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'whatsapp', label: 'WhatsApp' },
+  { id: 'website', label: 'Website' },
+];
+
+function isSettingsSection(value: string | null): value is SettingsSection {
+  return SETTINGS_SECTIONS.some((section) => section.id === value);
+}
+
+function isLeadSettingsSubsection(value: string | null): value is LeadSettingsSubsection {
+  return LEAD_SETTINGS_SUBSECTIONS.some((subsection) => subsection.id === value);
+}
+
+function isChannelSettingsSubsection(value: string | null): value is ChannelSettingsSubsection {
+  return CHANNEL_SETTINGS_SUBSECTIONS.some((subsection) => subsection.id === value);
+}
+
+function buildSettingsSearch(section: SettingsSection, subsection?: string) {
+  const params = new URLSearchParams({ section });
+
+  if (subsection) {
+    params.set('subsection', subsection);
+  }
+
+  return `?${params.toString()}`;
+}
+
 function toRequestError(error: unknown, fallback: string): RequestError {
   if (error && typeof error === 'object' && 'status' in error && 'message' in error) {
     const httpError = error as HttpError;
@@ -85,23 +129,143 @@ function emptyToNull(value: string) {
 }
 
 export function SettingsPage() {
+  const [searchParams] = useSearchParams();
+  const rawSection = searchParams.get('section');
+  const section: SettingsSection = isSettingsSection(rawSection) ? rawSection : 'general';
+  const leadSubsection: LeadSettingsSubsection = isLeadSettingsSubsection(searchParams.get('subsection'))
+    ? searchParams.get('subsection') as LeadSettingsSubsection
+    : 'sources';
+  const channelSubsection: ChannelSettingsSubsection = isChannelSettingsSubsection(searchParams.get('subsection'))
+    ? searchParams.get('subsection') as ChannelSettingsSubsection
+    : 'overview';
+
   return (
     <AppShell>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Settings</h1>
-          <p className="mt-1 text-sm text-gray-600">Manage your workspace, contact options, and integrations.</p>
+          <p className="mt-1 text-sm text-gray-600">Configure your workspace, lead workflow, channels, and team.</p>
         </div>
 
-        <WorkspaceSettingsSection />
-        <WhatsappIntegrationSection />
-        <WebsiteCaptureSection />
-        <WhatsappApprovedTemplatesSection />
-        <LeadSourcesSection />
-        <TagsSection />
+        <SettingsNavigation section={section} leadSubsection={leadSubsection} channelSubsection={channelSubsection} />
+
+        <div className="mx-auto w-full max-w-5xl">
+          {section === 'general' ? <GeneralSettings /> : null}
+          {section === 'leads' ? <LeadManagementSettings subsection={leadSubsection} /> : null}
+          {section === 'channels' ? <ChannelSettings subsection={channelSubsection} /> : null}
+          {section === 'templates' ? <TemplateSettings /> : null}
+        </div>
       </div>
     </AppShell>
   );
+}
+
+function SettingsNavigation({
+  section,
+  leadSubsection,
+  channelSubsection,
+}: {
+  section: SettingsSection;
+  leadSubsection: LeadSettingsSubsection;
+  channelSubsection: ChannelSettingsSubsection;
+}) {
+  return (
+    <div className="sticky top-0 z-20 space-y-2 border-b border-gray-200 bg-gray-50/95 py-2 backdrop-blur">
+      <nav aria-label="Settings categories" className="overflow-x-auto">
+        <div className="flex min-w-max gap-2">
+          {SETTINGS_SECTIONS.map((item) => (
+            <Link
+              key={item.id}
+              to={{ search: buildSettingsSearch(item.id, item.id === 'channels' ? 'overview' : item.id === 'leads' ? 'sources' : undefined) }}
+              aria-current={section === item.id ? 'page' : undefined}
+              className={
+                section === item.id
+                  ? 'rounded bg-gray-900 px-3 py-2 text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2'
+                  : 'rounded border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2'
+              }
+            >
+              {item.label}
+            </Link>
+          ))}
+        </div>
+      </nav>
+
+      {section === 'leads' ? (
+        <SettingsSubNavigation
+          label="Lead management settings"
+          items={LEAD_SETTINGS_SUBSECTIONS.map((item) => ({
+            ...item,
+            search: buildSettingsSearch('leads', item.id),
+            active: leadSubsection === item.id,
+          }))}
+        />
+      ) : null}
+
+      {section === 'channels' ? (
+        <SettingsSubNavigation
+          label="Channel settings"
+          items={CHANNEL_SETTINGS_SUBSECTIONS.map((item) => ({
+            ...item,
+            search: buildSettingsSearch('channels', item.id),
+            active: channelSubsection === item.id,
+          }))}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function SettingsSubNavigation({
+  label,
+  items,
+}: {
+  label: string;
+  items: Array<{ id: string; label: string; search: string; active: boolean }>;
+}) {
+  return (
+    <nav aria-label={label} className="overflow-x-auto">
+      <div className="flex min-w-max gap-2">
+        {items.map((item) => (
+          <Link
+            key={item.id}
+            to={{ search: item.search }}
+            aria-current={item.active ? 'page' : undefined}
+            className={
+              item.active
+                ? 'rounded border border-gray-900 bg-white px-3 py-1.5 text-sm font-semibold text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2'
+                : 'rounded border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2'
+            }
+          >
+            {item.label}
+          </Link>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+function GeneralSettings() {
+  return <WorkspaceSettingsSection />;
+}
+
+function LeadManagementSettings({ subsection }: { subsection: LeadSettingsSubsection }) {
+  return subsection === 'tags' ? <TagsSection /> : <LeadSourcesSection />;
+}
+
+function ChannelSettings({ subsection }: { subsection: ChannelSettingsSubsection }) {
+  if (subsection === 'whatsapp') {
+    return <WhatsappIntegrationSection />;
+  }
+
+  if (subsection === 'website') {
+    return <WebsiteCaptureSection />;
+  }
+
+  return <ChannelOverview />;
+}
+
+function TemplateSettings() {
+  return <WhatsappApprovedTemplatesSection />;
 }
 
 function formatConfigDate(value: string) {
@@ -133,6 +297,154 @@ function getWhatsappSetupStatus(diagnostics: WhatsappDiagnostics) {
   if (diagnostics.lastInboundMessageAt) return 'Active - inbound messages received';
   if (diagnostics.lastWebhookReceivedAt) return 'Active - receiving webhooks';
   return 'Active - no webhook received yet';
+}
+
+function isWhatsappDiagnosticsHealthy(diagnostics: WhatsappDiagnostics) {
+  return Boolean(
+    diagnostics.integrationExists &&
+      diagnostics.isActive &&
+      diagnostics.phoneNumberIdConfigured &&
+      diagnostics.businessIdConfigured &&
+      diagnostics.tokenConfigured &&
+      diagnostics.signatureVerificationEnabled,
+  );
+}
+
+function ChannelOverview() {
+  const { accessToken } = useAuth();
+  const [whatsappConfig, setWhatsappConfig] = useState<WhatsappConfig | null>(null);
+  const [whatsappDiagnostics, setWhatsappDiagnostics] = useState<WhatsappDiagnostics | null>(null);
+  const [websiteConfig, setWebsiteConfig] = useState<WebsiteCaptureConfig | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<RequestError | null>(null);
+
+  const fetchOverview = useCallback(async () => {
+    if (!accessToken) {
+      setWhatsappConfig(null);
+      setWhatsappDiagnostics(null);
+      setWebsiteConfig(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const [whatsappConfigResponse, whatsappDiagnosticsResponse, websiteConfigResponse] = await Promise.all([
+        getWhatsappConfig(accessToken),
+        getWhatsappDiagnostics(accessToken),
+        getWebsiteCaptureConfig(accessToken),
+      ]);
+
+      setWhatsappConfig(whatsappConfigResponse);
+      setWhatsappDiagnostics(whatsappDiagnosticsResponse);
+      setWebsiteConfig(websiteConfigResponse);
+    } catch (requestError) {
+      setWhatsappConfig(null);
+      setWhatsappDiagnostics(null);
+      setWebsiteConfig(null);
+      setError(toRequestError(requestError, 'Could not load channel overview.'));
+    } finally {
+      setLoading(false);
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    void fetchOverview();
+  }, [fetchOverview]);
+
+  const websiteStatus = getWebsiteCaptureStatus(websiteConfig);
+
+  return (
+    <section className="rounded border border-gray-200 bg-white p-5">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Channels</p>
+        <h2 className="mt-1 text-base font-semibold text-gray-900">Overview</h2>
+        <p className="mt-1 text-sm text-gray-600">Check which lead channels are configured and jump into their settings.</p>
+      </div>
+
+      {loading ? <p className="mt-4 rounded border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">Loading channel overview...</p> : null}
+
+      {!loading && error ? (
+        <div className="mt-4 rounded border border-red-200 bg-red-50 p-3">
+          <p className="text-sm text-red-700">{error.message}</p>
+          <button
+            type="button"
+            onClick={() => void fetchOverview()}
+            className="mt-3 rounded bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
+
+      {!loading && !error ? (
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <ChannelOverviewCard
+            title="WhatsApp"
+            configured={Boolean(whatsappConfig)}
+            active={Boolean(whatsappConfig?.isActive)}
+            status={whatsappDiagnostics ? getWhatsappSetupStatus(whatsappDiagnostics) : whatsappConfig ? 'Configured' : 'Not configured'}
+            manageSearch={buildSettingsSearch('channels', 'whatsapp')}
+          />
+          <ChannelOverviewCard
+            title="Website Lead Capture"
+            configured={Boolean(websiteConfig)}
+            active={Boolean(websiteConfig?.isActive)}
+            status={websiteStatus.label}
+            manageSearch={buildSettingsSearch('channels', 'website')}
+          />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ChannelOverviewCard({
+  title,
+  configured,
+  active,
+  status,
+  manageSearch,
+}: {
+  title: string;
+  configured: boolean;
+  active: boolean;
+  status: string;
+  manageSearch: string;
+}) {
+  return (
+    <article className="rounded border border-gray-200 bg-gray-50 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+          <p className="mt-1 text-sm text-gray-600">{status}</p>
+        </div>
+        <span
+          className={
+            active
+              ? 'rounded border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-800'
+              : 'rounded border border-gray-200 bg-white px-2 py-0.5 text-xs font-semibold text-gray-600'
+          }
+        >
+          {active ? 'Active' : 'Inactive'}
+        </span>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="rounded border border-gray-200 bg-white px-2 py-0.5 text-xs font-medium text-gray-700">
+          {configured ? 'Configured' : 'Not configured'}
+        </span>
+        <Link
+          to={{ search: manageSearch }}
+          className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+        >
+          Manage
+        </Link>
+      </div>
+    </article>
+  );
 }
 
 function toWhatsappRequestError(error: unknown, fallback: string): RequestError {
@@ -179,6 +491,7 @@ function WhatsappIntegrationSection() {
   const [accessTokenInput, setAccessTokenInput] = useState('');
   const [restartTemplateName, setRestartTemplateName] = useState('');
   const [restartTemplateLanguageCode, setRestartTemplateLanguageCode] = useState('');
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
 
   const fetchWhatsappState = useCallback(async (showLoadedMessage = false) => {
     if (!accessToken) {
@@ -217,6 +530,17 @@ function WhatsappIntegrationSection() {
   useEffect(() => {
     void fetchWhatsappState(true);
   }, [fetchWhatsappState]);
+
+  useEffect(() => {
+    if (error || actionError) {
+      setDiagnosticsOpen(true);
+      return;
+    }
+
+    if (diagnostics) {
+      setDiagnosticsOpen(!isWhatsappDiagnosticsHealthy(diagnostics));
+    }
+  }, [actionError, diagnostics, error]);
 
   const handleSave = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -436,53 +760,66 @@ function WhatsappIntegrationSection() {
 
       {!loading && !error && diagnostics ? (
         <div className="mt-4 rounded border border-gray-200 bg-white p-4">
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-            <h3 className="text-sm font-semibold text-gray-900">Diagnostics</h3>
-            <span className="text-sm font-medium text-gray-700">
-              {getWhatsappSetupStatus(diagnostics)}
+          <button
+            type="button"
+            onClick={() => setDiagnosticsOpen((current) => !current)}
+            aria-expanded={diagnosticsOpen}
+            aria-controls="whatsapp-diagnostics-panel"
+            className="flex w-full items-center justify-between gap-3 rounded text-left focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+          >
+            <span>
+              <span className="block text-sm font-semibold text-gray-900">Connection Diagnostics</span>
+              <span className="mt-1 block text-sm font-medium text-gray-700">{getWhatsappSetupStatus(diagnostics)}</span>
             </span>
-          </div>
-          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-            <ConfigDetail label="Integration exists" value={diagnostics.integrationExists ? 'Yes' : 'No'} />
-            <ConfigDetail label="Status" value={diagnostics.isActive ? 'Active' : 'Inactive'} />
-            <ConfigDetail
-              label="Phone number ID"
-              value={
-                diagnostics.phoneNumberIdConfigured
-                  ? diagnostics.phoneNumberIdMasked || 'Configured'
-                  : 'Not configured'
-              }
-            />
-            <ConfigDetail
-              label="Business ID"
-              value={
-                diagnostics.businessIdConfigured
-                  ? diagnostics.businessIdMasked || 'Configured'
-                  : 'Not configured'
-              }
-            />
-            <ConfigDetail label="Access token" value={diagnostics.tokenConfigured ? 'Configured' : 'Not configured'} />
-            <ConfigDetail
-              label="Signature verification"
-              value={diagnostics.signatureVerificationEnabled ? 'Enabled' : 'Not enabled'}
-            />
-            <ConfigDetail label="Last webhook received" value={formatDiagnosticDate(diagnostics.lastWebhookReceivedAt)} />
-            <ConfigDetail label="Last inbound message" value={formatDiagnosticDate(diagnostics.lastInboundMessageAt)} />
-            <ConfigDetail label="Last outbound message" value={formatDiagnosticDate(diagnostics.lastOutboundMessageAt)} />
-            <ConfigDetail label="Open conversations" value={String(diagnostics.openConversationCount)} />
-          </dl>
-          {!diagnostics.signatureVerificationEnabled ? (
-            <p className="mt-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-              Webhook signature verification is not enabled.
-            </p>
-          ) : null}
-          {diagnostics.isActive &&
-          (!diagnostics.phoneNumberIdConfigured ||
-            !diagnostics.businessIdConfigured ||
-            !diagnostics.tokenConfigured) ? (
-            <p className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-              Setup incomplete.
-            </p>
+            <span className={['text-gray-500 transition-transform', diagnosticsOpen ? 'rotate-180' : ''].join(' ')} aria-hidden="true">
+              v
+            </span>
+          </button>
+          {diagnosticsOpen ? (
+            <div id="whatsapp-diagnostics-panel" className="mt-4">
+              <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                <ConfigDetail label="Integration exists" value={diagnostics.integrationExists ? 'Yes' : 'No'} />
+                <ConfigDetail label="Status" value={diagnostics.isActive ? 'Active' : 'Inactive'} />
+                <ConfigDetail
+                  label="Phone number ID"
+                  value={
+                    diagnostics.phoneNumberIdConfigured
+                      ? diagnostics.phoneNumberIdMasked || 'Configured'
+                      : 'Not configured'
+                  }
+                />
+                <ConfigDetail
+                  label="Business ID"
+                  value={
+                    diagnostics.businessIdConfigured
+                      ? diagnostics.businessIdMasked || 'Configured'
+                      : 'Not configured'
+                  }
+                />
+                <ConfigDetail label="Access token" value={diagnostics.tokenConfigured ? 'Configured' : 'Not configured'} />
+                <ConfigDetail
+                  label="Signature verification"
+                  value={diagnostics.signatureVerificationEnabled ? 'Enabled' : 'Not enabled'}
+                />
+                <ConfigDetail label="Last webhook received" value={formatDiagnosticDate(diagnostics.lastWebhookReceivedAt)} />
+                <ConfigDetail label="Last inbound message" value={formatDiagnosticDate(diagnostics.lastInboundMessageAt)} />
+                <ConfigDetail label="Last outbound message" value={formatDiagnosticDate(diagnostics.lastOutboundMessageAt)} />
+                <ConfigDetail label="Open conversations" value={String(diagnostics.openConversationCount)} />
+              </dl>
+              {!diagnostics.signatureVerificationEnabled ? (
+                <p className="mt-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  Webhook signature verification is not enabled.
+                </p>
+              ) : null}
+              {diagnostics.isActive &&
+              (!diagnostics.phoneNumberIdConfigured ||
+                !diagnostics.businessIdConfigured ||
+                !diagnostics.tokenConfigured) ? (
+                <p className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  Setup incomplete.
+                </p>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -570,20 +907,25 @@ function WhatsappIntegrationSection() {
             >
               {saving ? 'Saving...' : config ? 'Replace configuration' : 'Save configuration'}
             </button>
-            {config ? (
-              <button
-                type="button"
-                onClick={() => {
-                  void handleDelete();
-                }}
-                disabled={saving || deleting || toggling}
-                className="rounded border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-red-300"
-              >
-                {deleting ? 'Deleting...' : 'Delete integration'}
-              </button>
-            ) : null}
           </div>
         </form>
+      ) : null}
+
+      {!error && config ? (
+        <div className="mt-5 rounded border border-red-200 bg-red-50 p-4">
+          <p className="text-sm font-semibold text-red-900">Danger Zone</p>
+          <p className="mt-1 text-sm text-red-800">Delete the saved WhatsApp integration credentials. This cannot be undone.</p>
+          <button
+            type="button"
+            onClick={() => {
+              void handleDelete();
+            }}
+            disabled={saving || deleting || toggling}
+            className="mt-3 rounded border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-red-300"
+          >
+            {deleting ? 'Deleting...' : 'Delete integration'}
+          </button>
+        </div>
       ) : null}
 
       <SettingsMessages error={actionError} successMessage={successMessage} />
@@ -1347,14 +1689,6 @@ function WebsiteCaptureSection() {
             </button>
             <button
               type="button"
-              onClick={() => void handleReset()}
-              disabled={isBusy}
-              className="rounded border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-red-300"
-            >
-              {busyAction === 'reset' ? 'Resetting...' : 'Reset key'}
-            </button>
-            <button
-              type="button"
               onClick={() => void handleToggle()}
               disabled={isBusy}
               className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-gray-400"
@@ -1366,6 +1700,23 @@ function WebsiteCaptureSection() {
                   : 'Turn back on'}
             </button>
           </div>
+        </div>
+      ) : null}
+
+      {!loading && !error && config ? (
+        <div className="mt-5 rounded border border-red-200 bg-red-50 p-4">
+          <p className="text-sm font-semibold text-red-900">Danger Zone</p>
+          <p className="mt-1 text-sm text-red-800">
+            Reset the website connection key if it was exposed. Your website form must be updated with the new key afterward.
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleReset()}
+            disabled={isBusy}
+            className="mt-3 rounded border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-red-300"
+          >
+            {busyAction === 'reset' ? 'Resetting...' : 'Reset key'}
+          </button>
         </div>
       ) : null}
 

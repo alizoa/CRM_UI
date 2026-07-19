@@ -1,4 +1,5 @@
 import type { Lead, LeadStatus, LeadTemperature } from '../../lib/leads';
+import type { ReactNode } from 'react';
 
 type Props = {
   lead: Lead;
@@ -35,12 +36,35 @@ function label(value: string) {
 function formatDate(value: string | null) {
   if (!value) return 'Not set';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString(undefined, {
+    month: 'numeric',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function formatRelativeDate(value: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const today = new Date();
+  const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dayDelta = Math.round((dateStart.getTime() - todayStart.getTime()) / 86_400_000);
+
+  if (dayDelta === 0) return 'today';
+  if (dayDelta === 1) return 'in 1 day';
+  if (dayDelta > 1) return `in ${dayDelta} days`;
+  if (dayDelta === -1) return 'overdue by 1 day';
+  return `overdue by ${Math.abs(dayDelta)} days`;
 }
 
 function formatFollowUp(value: string | null) {
   if (!value) return 'No follow-up task';
-  return formatDate(value);
+  const relative = formatRelativeDate(value);
+  return relative ? `${formatDate(value)} (${relative})` : formatDate(value);
 }
 
 function isOverdue(value: string | null) {
@@ -54,17 +78,60 @@ function ownerName(lead: Lead) {
   return [lead.owner.firstName, lead.owner.lastName].filter(Boolean).join(' ') || lead.owner.email;
 }
 
+function MetadataIcon({ path }: { path: string }) {
+  return (
+    <svg className="mt-0.5 h-4 w-4 shrink-0 text-gray-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d={path} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function MetadataItem({ label, children, icon }: { label: string; children: ReactNode; icon: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</dt>
+      <dd className="mt-2 flex min-w-0 items-start gap-2 text-sm text-gray-900">{icon ? <MetadataIcon path={icon} /> : null}<span className="min-w-0 break-words">{children}</span></dd>
+    </div>
+  );
+}
+
+function ContactMetadata({ lead }: { lead: Lead }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Contact</dt>
+      <dd className="mt-2 space-y-1 text-sm text-gray-900">
+        <span className="flex min-w-0 items-center gap-2">
+          <MetadataIcon path={ICONS.mail} />
+          <span className="min-w-0 truncate whitespace-nowrap" title={lead.email ?? 'No email'}>{lead.email || 'No email'}</span>
+        </span>
+        <span className="flex min-w-0 items-center gap-2">
+          <MetadataIcon path={ICONS.phone} />
+          <span className="min-w-0 truncate whitespace-nowrap" title={lead.phone ?? 'No phone'}>{lead.phone || 'No phone'}</span>
+        </span>
+      </dd>
+    </div>
+  );
+}
+
+const ICONS = {
+  owner: 'M20 21a8 8 0 0 0-16 0M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z',
+  mail: 'M4 6h16v12H4V6Zm0 1 8 6 8-6',
+  phone: 'M6.5 4.5 9 4l1.5 4-2 1.2a11 11 0 0 0 5.3 5.3l1.2-2 4 1.5-.5 2.5c-.2 1-1.1 1.6-2.1 1.5C9.9 17.5 4.5 12.1 4 5.6c-.1-1 .5-1.9 1.5-2.1Z',
+  source: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM3.6 9h16.8M3.6 15h16.8M12 3c2 2.4 3 5.4 3 9s-1 6.6-3 9c-2-2.4-3-5.4-3-9s1-6.6 3-9Z',
+  calendar: 'M7 3v4M17 3v4M4 8h16M5 5h14v15H5V5Z',
+};
+
 export function LeadOverviewCard({ lead, busy, editing, onConvert, onDelete, onMarkContacted, onMarkQualified, onEdit, onMarkLost, onReopen }: Props) {
   const name = [lead.firstName, lead.lastName].filter(Boolean).join(' ') || 'Unnamed lead';
   const active = ['NEW', 'CONTACTED', 'FOLLOW_UP_NEEDED', 'QUALIFIED'].includes(lead.status);
   const canConvert = active && Boolean(lead.firstName?.trim());
 
   return (
-    <section className="rounded-xl border border-gray-200 bg-white p-5">
+    <section className="rounded-lg border border-gray-200 bg-white p-5 sm:p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-semibold text-gray-900">{name}</h1>
+            <h1 className="text-2xl font-semibold tracking-normal text-gray-950">{name}</h1>
             <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${STATUS_STYLES[lead.status]}`}>{label(lead.status)}</span>
             {lead.temperature ? <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${TEMPERATURE_STYLES[lead.temperature]}`}>{label(lead.temperature)}</span> : null}
           </div>
@@ -75,29 +142,30 @@ export function LeadOverviewCard({ lead, busy, editing, onConvert, onDelete, onM
           ) : null}
           {active && !canConvert ? <p className="mt-2 text-sm text-amber-700">Add a first name before marking this lead won.</p> : null}
         </div>
-        <div className="flex flex-wrap gap-2">
-          {active ? <button type="button" disabled={busy || !canConvert} onClick={onConvert} className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-gray-300">Mark Won</button> : null}
-          {lead.status === 'NEW' ? <button type="button" disabled={busy} onClick={onMarkContacted} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:text-gray-400">Mark Contacted</button> : null}
-          {lead.status === 'NEW' || lead.status === 'CONTACTED' ? <button type="button" disabled={busy} onClick={onMarkQualified} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:text-gray-400">Mark Qualified</button> : null}
-          {lead.status !== 'WON' ? <button type="button" disabled={busy || editing} onClick={onEdit} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:text-gray-400">Edit</button> : null}
-          {active ? <button type="button" disabled={busy} onClick={onMarkLost} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:text-gray-400">Mark Lost</button> : null}
-          {lead.status === 'LOST' ? <button type="button" disabled={busy} onClick={onReopen} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:text-gray-400">Reopen</button> : null}
-          <button type="button" disabled={busy} onClick={onDelete} className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:text-red-300">Delete</button>
+        <div className="flex flex-wrap gap-2 lg:justify-end">
+          {active ? <button type="button" disabled={busy || !canConvert} onClick={onConvert} className="rounded bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-gray-300">Mark Won</button> : null}
+          {lead.status === 'NEW' ? <button type="button" disabled={busy} onClick={onMarkContacted} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Mark Contacted</button> : null}
+          {lead.status === 'NEW' || lead.status === 'CONTACTED' ? <button type="button" disabled={busy} onClick={onMarkQualified} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Mark Qualified</button> : null}
+          {lead.status !== 'WON' ? <button type="button" disabled={busy || editing} onClick={onEdit} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Edit</button> : null}
+          {active ? <button type="button" disabled={busy} onClick={onMarkLost} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Mark Lost</button> : null}
+          {lead.status === 'LOST' ? <button type="button" disabled={busy} onClick={onReopen} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Reopen</button> : null}
+          <button type="button" disabled={busy} onClick={onDelete} className="rounded border border-red-200 bg-white px-5 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:text-red-300">Delete</button>
         </div>
       </div>
 
-      <dl className="mt-6 grid gap-4 border-t border-gray-100 pt-5 sm:grid-cols-2 lg:grid-cols-4">
-        <div><dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Owner</dt><dd className="mt-1 text-sm text-gray-900">{ownerName(lead)}</dd></div>
-        <div><dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Contact</dt><dd className="mt-1 break-words text-sm text-gray-900">{lead.email || 'No email'}<br />{lead.phone || 'No phone'}</dd></div>
-        <div><dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Source</dt><dd className="mt-1 text-sm text-gray-900">{lead.leadSource?.name ?? label(lead.source)}</dd></div>
+      <dl className="mt-6 grid gap-x-8 gap-y-5 border-t border-gray-100 pt-5 sm:grid-cols-2 lg:grid-cols-[minmax(130px,0.8fr)_minmax(260px,1.7fr)_minmax(120px,0.8fr)_minmax(220px,1.5fr)_minmax(170px,1fr)_minmax(170px,1fr)]">
+        <MetadataItem label="Owner" icon={ICONS.owner}>{ownerName(lead)}</MetadataItem>
+        <ContactMetadata lead={lead} />
+        <MetadataItem label="Source" icon={ICONS.source}>{lead.leadSource?.name ?? label(lead.source)}</MetadataItem>
         <div>
           <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Next follow-up</dt>
-          <dd className={`mt-1 text-sm ${isOverdue(lead.nextFollowUpAt) ? 'font-semibold text-red-700' : 'text-gray-900'}`}>
+          <dd className={`mt-2 flex items-start gap-2 text-sm ${isOverdue(lead.nextFollowUpAt) ? 'font-semibold text-red-700' : 'text-gray-900'}`}>
+            <MetadataIcon path={ICONS.calendar} />
             <a className="underline decoration-gray-300 underline-offset-2 hover:text-gray-700" href="#lead-tasks">{formatFollowUp(lead.nextFollowUpAt)}</a>
           </dd>
         </div>
-        <div><dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Created</dt><dd className="mt-1 text-sm text-gray-900">{formatDate(lead.createdAt)}</dd></div>
-        <div><dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Updated</dt><dd className="mt-1 text-sm text-gray-900">{formatDate(lead.updatedAt)}</dd></div>
+        <MetadataItem label="Created" icon={ICONS.calendar}>{formatDate(lead.createdAt)}</MetadataItem>
+        <MetadataItem label="Updated" icon={ICONS.calendar}>{formatDate(lead.updatedAt)}</MetadataItem>
       </dl>
     </section>
   );
