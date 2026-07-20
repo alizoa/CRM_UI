@@ -7,6 +7,7 @@ const ACTIVE_LEAD_STATUSES: LeadStatus[] = ['NEW', 'CONTACTED', 'FOLLOW_UP_NEEDE
 let demoLeads = DEMO_LEADS.map((lead) => ({ ...lead })) as Lead[];
 
 export type LeadStatus = 'NEW' | 'CONTACTED' | 'FOLLOW_UP_NEEDED' | 'QUALIFIED' | 'WON' | 'LOST';
+export type LeadStage = 'NEW' | 'CONTACTED' | 'QUALIFIED' | 'WON' | 'LOST';
 export type LeadTemperature = 'HOT' | 'WARM' | 'COLD';
 export type LeadSourceChannel =
   | 'WEBSITE'
@@ -26,6 +27,7 @@ export type Lead = {
   email: string | null;
   phone: string | null;
   status: LeadStatus;
+  stage: LeadStage;
   temperature: LeadTemperature | null;
   ownerId: string | null;
   readonly nextFollowUpAt: string | null;
@@ -74,6 +76,7 @@ export type LeadFilters = {
   ownerId?: string;
   temperature?: LeadTemperature;
   source?: LeadSourceChannel;
+  includeAll?: boolean;
 };
 
 export type CreateLeadInput = {
@@ -96,6 +99,7 @@ export type UpdateLeadInput = {
   ownerId?: string | null;
   leadSourceId?: string | null;
   status?: LeadStatus;
+  stage?: LeadStage;
 };
 
 export type DuplicateContactCandidate = {
@@ -114,8 +118,17 @@ export type ConvertLeadResponse = {
 function withDerivedFollowUp(lead: Lead): Lead {
   return {
     ...lead,
+    stage: lead.stage ?? stageFromStatus(lead.status),
     nextFollowUpAt: getLeadNextFollowUp(lead.id),
   };
+}
+
+function stageFromStatus(status: LeadStatus): LeadStage {
+  if (status === 'QUALIFIED' || status === 'WON' || status === 'LOST' || status === 'CONTACTED') {
+    return status;
+  }
+
+  return 'NEW';
 }
 
 export function listLeads(_token: string, filters: LeadFilters = {}): Promise<LeadsResponse> {
@@ -128,7 +141,7 @@ export function listLeads(_token: string, filters: LeadFilters = {}): Promise<Le
   }
   if (filters.status) {
     data = data.filter(l => l.status === filters.status);
-  } else {
+  } else if (!filters.includeAll) {
     data = data.filter(l => ACTIVE_LEAD_STATUSES.includes(l.status));
   }
   if (filters.temperature) data = data.filter(l => l.temperature === filters.temperature);
@@ -150,6 +163,7 @@ export function createLead(_token: string, _input: CreateLeadInput): Promise<Lea
     email: _input.email ?? null,
     phone: _input.phone ?? null,
     status: 'NEW',
+    stage: 'NEW',
     temperature: _input.temperature ?? null,
     ownerId: _input.ownerId ?? null,
     nextFollowUpAt: null,
@@ -175,9 +189,11 @@ export function updateLead(_token: string, id: string, input: UpdateLeadInput): 
   const index = demoLeads.findIndex(x => x.id === id);
   if (index < 0) return Promise.reject(Object.assign(new Error('Not found'), { status: 404 }));
   const current = demoLeads[index];
+  const nextStage = input.stage ?? (input.status && input.status !== 'FOLLOW_UP_NEEDED' ? stageFromStatus(input.status) : current.stage);
   const next: Lead = {
     ...current,
     ...input,
+    stage: nextStage,
     updatedAt: new Date().toISOString(),
     convertedContactId: input.status === 'WON' ? null : current.convertedContactId,
     convertedAt: input.status === 'WON' ? new Date().toISOString() : current.convertedAt,

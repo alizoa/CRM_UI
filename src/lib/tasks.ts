@@ -6,9 +6,11 @@ const TASKS_CHANGED_EVENT = 'alozix-demo-tasks-changed';
 
 export type EntityType = 'CONTACT' | 'DEAL' | 'LEAD';
 export type TaskStatus = 'TODO' | 'IN_PROGRESS' | 'WAITING' | 'DONE';
+export type TaskType = 'FOLLOW_UP' | 'GENERAL';
 
 export type Task = {
   id: string;
+  taskType: TaskType;
   entityType: EntityType;
   entityId: string;
   title: string;
@@ -56,6 +58,7 @@ export type TasksResponse = {
 };
 
 export type CreateTaskInput = {
+  taskType?: TaskType;
   entityType: EntityType;
   entityId: string;
   title: string;
@@ -66,6 +69,7 @@ export type CreateTaskInput = {
 };
 
 export type UpdateTaskInput = {
+  taskType?: TaskType;
   title?: string;
   description?: string | null;
   dueAt?: string | null;
@@ -92,19 +96,24 @@ export function subscribeToTaskChanges(listener: () => void) {
 
 export function isOpenFollowUpTask(task: Task) {
   return task.entityType === 'LEAD'
+    && task.taskType === 'FOLLOW_UP'
     && task.status !== 'DONE'
     && task.status !== ('CANCELLED' as TaskStatus)
     && Boolean(task.dueAt);
 }
 
-export function getLeadNextFollowUpTask(leadId: string): Task | null {
-  return demoTasks
+export function getNextFollowUpTask(leadId: string, tasks: Task[]): Task | null {
+  return tasks
     .filter((task) => task.entityId === leadId && isOpenFollowUpTask(task))
     .sort((a, b) => {
       const aTime = a.dueAt ? new Date(a.dueAt).getTime() : Number.POSITIVE_INFINITY;
       const bTime = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
       return aTime - bTime;
     })[0] ?? null;
+}
+
+export function getLeadNextFollowUpTask(leadId: string): Task | null {
+  return getNextFollowUpTask(leadId, demoTasks);
 }
 
 export function getLeadNextFollowUp(leadId: string) {
@@ -153,6 +162,7 @@ export function createTask(_token: string, input: CreateTaskInput): Promise<Task
   const now = new Date().toISOString();
   const task: Task = {
     id: `tsk-demo-${Date.now()}`,
+    taskType: input.taskType ?? 'GENERAL',
     entityType: input.entityType,
     entityId: input.entityId,
     title: input.title,

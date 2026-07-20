@@ -17,12 +17,12 @@ import {
   reopenLead,
   updateLead,
   type Lead,
-  type LeadStatus,
+  type LeadStage,
   type LeadTemperature,
   type UpdateLeadInput,
 } from '../lib/leads';
 import { listMembershipOptions, type MembershipOption } from '../lib/memberships';
-import { completeTask, listTasks, type Task, type TaskStatus } from '../lib/tasks';
+import { completeTask, isOpenFollowUpTask, listTasks, type Task, type TaskStatus } from '../lib/tasks';
 
 type RequestError = { status: number; message: string };
 type FormState = {
@@ -35,11 +35,10 @@ type FormState = {
   leadSourceId: string;
 };
 
-type MainStage = 'NEW' | 'CONTACTED' | 'QUALIFIED' | 'WON' | 'LOST';
 type ProgressStep =
   | {
       kind: 'stage';
-      id: MainStage;
+      id: LeadStage;
       label: string;
       date: string | null;
       completed: boolean;
@@ -55,7 +54,7 @@ type ProgressStep =
       dueAt: string | null;
     };
 
-const MAIN_STAGES: Array<{ id: MainStage; label: string }> = [
+const MAIN_STAGES: Array<{ id: LeadStage; label: string }> = [
   { id: 'NEW', label: 'New' },
   { id: 'CONTACTED', label: 'Contacted' },
   { id: 'QUALIFIED', label: 'Qualified' },
@@ -63,10 +62,9 @@ const MAIN_STAGES: Array<{ id: MainStage; label: string }> = [
   { id: 'LOST', label: 'Lost' },
 ];
 
-const STATUS_LABELS: Record<LeadStatus, string> = {
+const STAGE_LABELS: Record<LeadStage, string> = {
   NEW: 'New',
   CONTACTED: 'Contacted',
-  FOLLOW_UP_NEEDED: 'Follow-up Needed',
   QUALIFIED: 'Qualified',
   WON: 'Won',
   LOST: 'Lost',
@@ -77,11 +75,6 @@ const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   IN_PROGRESS: 'In progress',
   WAITING: 'Waiting',
   DONE: 'Done',
-};
-
-const HISTORICAL_FOLLOW_UP_COUNTS: Record<string, number> = {
-  'led-001': 1,
-  'led-003': 1,
 };
 
 function requestError(error: unknown, fallback: string): RequestError {
@@ -170,22 +163,24 @@ function sourceLabel(value: string) {
   return value.charAt(0) + value.slice(1).toLowerCase().replace(/_/g, ' ');
 }
 
-function currentMainStage(lead: Lead): MainStage {
-  if (lead.status === 'FOLLOW_UP_NEEDED') return 'CONTACTED';
-  if (lead.status === 'WON' || lead.status === 'LOST' || lead.status === 'QUALIFIED' || lead.status === 'CONTACTED') return lead.status;
-  return 'NEW';
+function currentMainStage(lead: Lead): LeadStage {
+  return lead.stage;
 }
 
-function stageDate(lead: Lead, stage: MainStage) {
+function stageDate(lead: Lead, stage: LeadStage) {
   if (stage === 'NEW') return lead.createdAt;
-  if (stage === currentMainStage(lead) || (stage === 'WON' && lead.status === 'WON') || (stage === 'LOST' && lead.status === 'LOST')) {
+  if (stage === currentMainStage(lead) || (stage === 'WON' && lead.stage === 'WON') || (stage === 'LOST' && lead.stage === 'LOST')) {
     return lead.updatedAt;
   }
   return null;
 }
 
 function isOpenTask(task: Task) {
-  return task.status !== 'DONE' && Boolean(task.dueAt);
+  return isOpenFollowUpTask(task);
+}
+
+function isFollowUpTask(task: Task) {
+  return task.entityType === 'LEAD' && task.taskType === 'FOLLOW_UP' && Boolean(task.dueAt);
 }
 
 function getNextActionTask(tasks: Task[]) {
@@ -198,21 +193,33 @@ function getNextActionTask(tasks: Task[]) {
     })[0] ?? null;
 }
 
-function followUpSequence(lead: Lead, tasks: Task[]) {
-  const completedCount = tasks.filter((task) => task.status === 'DONE').length;
-  return Math.max(1, completedCount + (HISTORICAL_FOLLOW_UP_COUNTS[lead.id] ?? 0) + 1);
+function getTaskTime(task: Task) {
+  return new Date(task.dueAt ?? task.createdAt).getTime();
+}
+
+function followUpSequence(_lead: Lead, tasks: Task[], currentTask: Task | null = getNextActionTask(tasks)) {
+  const followUpTasks = tasks
+    .filter(isFollowUpTask)
+    .sort((left, right) => getTaskTime(left) - getTaskTime(right));
+
+  if (currentTask) {
+    const index = followUpTasks.findIndex((task) => task.id === currentTask.id);
+    return index >= 0 ? index + 1 : followUpTasks.length + 1;
+  }
+
+  return followUpTasks.length + 1;
 }
 
 function buildProgressSteps(lead: Lead, tasks: Task[], nextTask: Task | null): ProgressStep[] {
   const currentStage = currentMainStage(lead);
   const currentStageIndex = MAIN_STAGES.findIndex((stage) => stage.id === currentStage);
-  const shouldShowFollowUp = Boolean(nextTask) || lead.status === 'FOLLOW_UP_NEEDED';
-  const sequence = followUpSequence(lead, tasks);
+  const shouldShowFollowUp = Boolean(nextTask);
+  const sequence = followUpSequence(lead, tasks, nextTask);
   const steps: ProgressStep[] = [];
 
   for (const [index, stage] of MAIN_STAGES.entries()) {
-    const isLostPath = lead.status === 'LOST';
-    const isWonPath = lead.status === 'WON';
+    const isLostPath = lead.stage === 'LOST';
+    const isWonPath = lead.stage === 'WON';
     const completed = isWonPath
       ? stage.id !== 'LOST' && index <= currentStageIndex
       : !isLostPath && (shouldShowFollowUp ? index <= currentStageIndex : index < currentStageIndex);
@@ -228,7 +235,7 @@ function buildProgressSteps(lead: Lead, tasks: Task[], nextTask: Task | null): P
       lost: stage.id === 'LOST',
     });
 
-    if (shouldShowFollowUp && stage.id === currentStage && lead.status !== 'WON' && lead.status !== 'LOST') {
+    if (shouldShowFollowUp && stage.id === currentStage && lead.stage !== 'WON' && lead.stage !== 'LOST') {
       steps.push({
         kind: 'follow-up',
         id: 'FOLLOW_UP',
@@ -284,7 +291,6 @@ export function LeadDetailPage() {
   const [lead, setLead] = useState<Lead | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [leadTasks, setLeadTasks] = useState<Task[]>([]);
-  const [tasksRefreshKey, setTasksRefreshKey] = useState(0);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(false);
   const [tasksLoading, setTasksLoading] = useState(false);
@@ -332,13 +338,12 @@ export function LeadDetailPage() {
   }, [accessToken, id]);
 
   const refreshLeadTasks = useCallback(() => {
-    setTasksRefreshKey((current) => current + 1);
     void fetchLeadTasks();
     void fetchLead();
   }, [fetchLead, fetchLeadTasks]);
 
   useEffect(() => { void fetchLead(); }, [fetchLead]);
-  useEffect(() => { void fetchLeadTasks(); }, [fetchLeadTasks, tasksRefreshKey]);
+  useEffect(() => { void fetchLeadTasks(); }, [fetchLeadTasks]);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -400,7 +405,7 @@ export function LeadDetailPage() {
     setActionError(null);
     setSuccess(null);
     try {
-      const response = await updateLead(accessToken, lead.id, { status });
+      const response = await updateLead(accessToken, lead.id, { status, stage: status });
       setLead(response);
       setForm(formState(response));
       setEditing(false);
@@ -487,7 +492,7 @@ export function LeadDetailPage() {
                 task={nextActionTask}
                 tasksLoading={tasksLoading}
                 assignee={assigneeName(nextActionTask, memberships)}
-                sequence={followUpSequence(lead, leadTasks)}
+                sequence={followUpSequence(lead, leadTasks, nextActionTask)}
                 busy={taskActionLoading}
                 onComplete={() => void completeFollowUp()}
                 onReschedule={() => nextActionTask ? setSelectedTask(nextActionTask) : undefined}
@@ -526,7 +531,6 @@ export function LeadDetailPage() {
               <LeadSourceContextCard lead={lead} />
               <div id="lead-tasks">
                 <EntityTasksPanel
-                  key={tasksRefreshKey}
                   entityType="LEAD"
                   entityId={lead.id}
                   title="Lead follow-up tasks"
@@ -605,8 +609,8 @@ function EditLeadCard({
 }
 
 function LeadProgressCard({ lead, tasks, nextTask, tasksLoading }: { lead: Lead; tasks: Task[]; nextTask: Task | null; tasksLoading: boolean }) {
-  const shouldShowFollowUp = Boolean(nextTask) || lead.status === 'FOLLOW_UP_NEEDED';
-  const sequence = followUpSequence(lead, tasks);
+  const shouldShowFollowUp = Boolean(nextTask);
+  const sequence = followUpSequence(lead, tasks, nextTask);
   const followUpOverdue = isOverdue(nextTask?.dueAt);
   const progressSteps = buildProgressSteps(lead, tasks, nextTask);
   const relativeDue = formatRelativeDate(nextTask?.dueAt);
@@ -614,7 +618,7 @@ function LeadProgressCard({ lead, tasks, nextTask, tasksLoading }: { lead: Lead;
     ? followUpOverdue
       ? `Follow-up #${sequence} is ${relativeDue || 'overdue'}`
       : `This lead is waiting for follow-up #${sequence}`
-    : lead.status === 'WON'
+    : lead.stage === 'WON'
       ? 'This lead has been won.'
       : 'No active follow-up is currently waiting.';
 
@@ -654,7 +658,7 @@ function LeadProgressCard({ lead, tasks, nextTask, tasksLoading }: { lead: Lead;
         </p>
       ) : null}
       {!tasksLoading && !shouldShowFollowUp ? (
-        <p className={`mt-5 rounded border p-3 text-sm ${lead.status === 'WON' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-gray-200 bg-gray-50 text-gray-600'}`}>{statusMessage}</p>
+        <p className={`mt-5 rounded border p-3 text-sm ${lead.stage === 'WON' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-gray-200 bg-gray-50 text-gray-600'}`}>{statusMessage}</p>
       ) : null}
     </section>
   );
@@ -851,8 +855,8 @@ function RecentLeadTimeline({ lead, tasks, onRefresh }: { lead: Lead; tasks: Tas
     { id: 'contacted', title: 'Contacted the lead', context: lead.status === 'NEW' ? 'Awaiting first contact' : 'By Demo User', actor: 'Demo User', date: lead.updatedAt, icon: ICONS.phone, tone: 'green' },
     { id: 'completed', title: 'Follow-up completed', context: 'Discussed needs', actor: 'Demo User', date: '2024-06-17T11:40:00.000Z', icon: ICONS.calendar, tone: 'blue' },
     { id: 'note', title: 'Note added', context: 'Interested in pricing', actor: 'Demo User', date: '2024-06-18T14:15:00.000Z', icon: ICONS.note, tone: 'purple' },
-    { id: 'scheduled', title: 'Follow-up scheduled', context: nextTask ? `Follow-up #${followUpSequence(lead, tasks)}` : 'No active follow-up', actor: 'Demo User', date: nextTask?.updatedAt ?? lead.updatedAt, icon: ICONS.calendar, tone: 'amber' },
-    { id: 'stage', title: 'Stage updated', context: `Moved to ${STATUS_LABELS[lead.status]}`, actor: 'Demo User', date: lead.updatedAt, icon: ICONS.person, tone: 'green' },
+    { id: 'scheduled', title: 'Follow-up scheduled', context: nextTask ? `Follow-up #${followUpSequence(lead, tasks, nextTask)}` : 'No active follow-up', actor: 'Demo User', date: nextTask?.updatedAt ?? lead.updatedAt, icon: ICONS.calendar, tone: 'amber' },
+    { id: 'stage', title: 'Stage updated', context: `Moved to ${STAGE_LABELS[lead.stage]}`, actor: 'Demo User', date: lead.updatedAt, icon: ICONS.person, tone: 'green' },
   ];
 
   return (

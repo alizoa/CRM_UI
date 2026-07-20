@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getDashboardSummary, type DashboardSummary } from '../lib/dashboard';
 import type { HttpError } from '../lib/http';
+import { subscribeToTaskChanges } from '../lib/tasks';
 
 export type DashboardError = {
   status: number;
@@ -53,6 +54,10 @@ export function useDashboard(token: string | null) {
   useEffect(() => {
     void refetch();
   }, [refetch]);
+
+  useEffect(() => subscribeToTaskChanges(() => {
+    void refetch();
+  }), [refetch]);
 
   return {
     data,

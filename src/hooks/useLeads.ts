@@ -26,7 +26,7 @@ function toRequestError(error: unknown, fallback: string): RequestError {
 }
 
 export function useLeads(token: string | null, filters: LeadFilters = {}) {
-  const { page, limit, search, status, ownerId, temperature, source } = filters;
+  const { page, limit, search, status, ownerId, temperature, source, includeAll } = filters;
   const [data, setData] = useState<LeadsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<RequestError | null>(null);
@@ -51,6 +51,7 @@ export function useLeads(token: string | null, filters: LeadFilters = {}) {
         ownerId,
         temperature,
         source,
+        includeAll,
       }));
     } catch (requestError) {
       setData(null);
@@ -58,7 +59,7 @@ export function useLeads(token: string | null, filters: LeadFilters = {}) {
     } finally {
       setLoading(false);
     }
-  }, [limit, ownerId, page, search, source, status, temperature, token]);
+  }, [includeAll, limit, ownerId, page, search, source, status, temperature, token]);
 
   const createLead = useCallback(async (input: CreateLeadInput): Promise<Lead | null> => {
     if (!token) {
@@ -90,7 +91,9 @@ export function useLeads(token: string | null, filters: LeadFilters = {}) {
       const updatedLead = await updateLeadRequest(token, id, input);
       setData((current) => {
         if (!current) return current;
-        const shouldKeep = filters.status
+        const shouldKeep = filters.includeAll
+          ? true
+          : filters.status
           ? updatedLead.status === filters.status
           : ['NEW', 'CONTACTED', 'FOLLOW_UP_NEEDED', 'QUALIFIED'].includes(updatedLead.status);
         const exists = current.data.some((lead) => lead.id === id);
@@ -107,7 +110,7 @@ export function useLeads(token: string | null, filters: LeadFilters = {}) {
     } catch (requestError) {
       throw toRequestError(requestError, 'Could not update lead.');
     }
-  }, [filters.status, token]);
+  }, [filters.includeAll, filters.status, token]);
 
   useEffect(() => {
     void refetch();

@@ -1,4 +1,4 @@
-import type { Lead, LeadStatus, LeadTemperature } from '../../lib/leads';
+import type { Lead, LeadStage, LeadTemperature } from '../../lib/leads';
 import type { ReactNode } from 'react';
 
 type Props = {
@@ -14,10 +14,9 @@ type Props = {
   onReopen: () => void;
 };
 
-const STATUS_STYLES: Record<LeadStatus, string> = {
+const STAGE_STYLES: Record<LeadStage, string> = {
   NEW: 'border-blue-200 bg-blue-50 text-blue-700',
   CONTACTED: 'border-violet-200 bg-violet-50 text-violet-700',
-  FOLLOW_UP_NEEDED: 'border-amber-200 bg-amber-50 text-amber-700',
   QUALIFIED: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   WON: 'border-green-200 bg-green-50 text-green-700',
   LOST: 'border-gray-200 bg-gray-100 text-gray-600',
@@ -43,34 +42,6 @@ function formatDate(value: string | null) {
     hour: 'numeric',
     minute: '2-digit',
   });
-}
-
-function formatRelativeDate(value: string | null) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const today = new Date();
-  const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const dayDelta = Math.round((dateStart.getTime() - todayStart.getTime()) / 86_400_000);
-
-  if (dayDelta === 0) return 'today';
-  if (dayDelta === 1) return 'in 1 day';
-  if (dayDelta > 1) return `in ${dayDelta} days`;
-  if (dayDelta === -1) return 'overdue by 1 day';
-  return `overdue by ${Math.abs(dayDelta)} days`;
-}
-
-function formatFollowUp(value: string | null) {
-  if (!value) return 'No follow-up task';
-  const relative = formatRelativeDate(value);
-  return relative ? `${formatDate(value)} (${relative})` : formatDate(value);
-}
-
-function isOverdue(value: string | null) {
-  if (!value) return false;
-  const date = new Date(value);
-  return !Number.isNaN(date.getTime()) && date.getTime() < Date.now();
 }
 
 function ownerName(lead: Lead) {
@@ -123,7 +94,7 @@ const ICONS = {
 
 export function LeadOverviewCard({ lead, busy, editing, onConvert, onDelete, onMarkContacted, onMarkQualified, onEdit, onMarkLost, onReopen }: Props) {
   const name = [lead.firstName, lead.lastName].filter(Boolean).join(' ') || 'Unnamed lead';
-  const active = ['NEW', 'CONTACTED', 'FOLLOW_UP_NEEDED', 'QUALIFIED'].includes(lead.status);
+  const active = lead.stage !== 'WON' && lead.stage !== 'LOST';
   const canConvert = active && Boolean(lead.firstName?.trim());
 
   return (
@@ -132,10 +103,10 @@ export function LeadOverviewCard({ lead, busy, editing, onConvert, onDelete, onM
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-normal text-gray-950">{name}</h1>
-            <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${STATUS_STYLES[lead.status]}`}>{label(lead.status)}</span>
+            <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${STAGE_STYLES[lead.stage]}`}>{label(lead.stage)}</span>
             {lead.temperature ? <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${TEMPERATURE_STYLES[lead.temperature]}`}>{label(lead.temperature)}</span> : null}
           </div>
-          {lead.status === 'WON' ? (
+          {lead.stage === 'WON' ? (
             <p className="mt-2 text-sm text-green-700">
               This lead has been won and is read-only.
             </p>
@@ -144,26 +115,19 @@ export function LeadOverviewCard({ lead, busy, editing, onConvert, onDelete, onM
         </div>
         <div className="flex flex-wrap gap-2 lg:justify-end">
           {active ? <button type="button" disabled={busy || !canConvert} onClick={onConvert} className="rounded bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-gray-300">Mark Won</button> : null}
-          {lead.status === 'NEW' ? <button type="button" disabled={busy} onClick={onMarkContacted} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Mark Contacted</button> : null}
-          {lead.status === 'NEW' || lead.status === 'CONTACTED' ? <button type="button" disabled={busy} onClick={onMarkQualified} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Mark Qualified</button> : null}
-          {lead.status !== 'WON' ? <button type="button" disabled={busy || editing} onClick={onEdit} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Edit</button> : null}
+          {lead.stage === 'NEW' ? <button type="button" disabled={busy} onClick={onMarkContacted} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Mark Contacted</button> : null}
+          {lead.stage === 'NEW' || lead.stage === 'CONTACTED' ? <button type="button" disabled={busy} onClick={onMarkQualified} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Mark Qualified</button> : null}
+          {lead.stage !== 'WON' ? <button type="button" disabled={busy || editing} onClick={onEdit} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Edit</button> : null}
           {active ? <button type="button" disabled={busy} onClick={onMarkLost} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Mark Lost</button> : null}
-          {lead.status === 'LOST' ? <button type="button" disabled={busy} onClick={onReopen} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Reopen</button> : null}
+          {lead.stage === 'LOST' ? <button type="button" disabled={busy} onClick={onReopen} className="rounded border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:text-gray-400">Reopen</button> : null}
           <button type="button" disabled={busy} onClick={onDelete} className="rounded border border-red-200 bg-white px-5 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:text-red-300">Delete</button>
         </div>
       </div>
 
-      <dl className="mt-6 grid gap-x-8 gap-y-5 border-t border-gray-100 pt-5 sm:grid-cols-2 lg:grid-cols-[minmax(130px,0.8fr)_minmax(260px,1.7fr)_minmax(120px,0.8fr)_minmax(220px,1.5fr)_minmax(170px,1fr)_minmax(170px,1fr)]">
+      <dl className="mt-6 grid gap-x-8 gap-y-5 border-t border-gray-100 pt-5 sm:grid-cols-2 lg:grid-cols-[minmax(130px,0.85fr)_minmax(280px,1.8fr)_minmax(130px,0.85fr)_minmax(180px,1fr)_minmax(180px,1fr)]">
         <MetadataItem label="Owner" icon={ICONS.owner}>{ownerName(lead)}</MetadataItem>
         <ContactMetadata lead={lead} />
         <MetadataItem label="Source" icon={ICONS.source}>{lead.leadSource?.name ?? label(lead.source)}</MetadataItem>
-        <div>
-          <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Next follow-up</dt>
-          <dd className={`mt-2 flex items-start gap-2 text-sm ${isOverdue(lead.nextFollowUpAt) ? 'font-semibold text-red-700' : 'text-gray-900'}`}>
-            <MetadataIcon path={ICONS.calendar} />
-            <a className="underline decoration-gray-300 underline-offset-2 hover:text-gray-700" href="#lead-tasks">{formatFollowUp(lead.nextFollowUpAt)}</a>
-          </dd>
-        </div>
         <MetadataItem label="Created" icon={ICONS.calendar}>{formatDate(lead.createdAt)}</MetadataItem>
         <MetadataItem label="Updated" icon={ICONS.calendar}>{formatDate(lead.updatedAt)}</MetadataItem>
       </dl>

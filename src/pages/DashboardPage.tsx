@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { OnboardingChecklist } from '../components/dashboard/OnboardingChecklist';
@@ -12,6 +12,27 @@ type LeadTemperatureRow = DashboardSummary['leadTemperature'][number];
 type LeadSourceRow = DashboardSummary['leadSources'][number];
 type OwnerWorkloadRow = DashboardSummary['ownership'][number];
 type RecentLeadActivity = DashboardSummary['activities']['recent'][number];
+type KeyMetricId = 'newLeads' | 'needsAttention' | 'followUpsDueToday' | 'overdueFollowUps';
+type KeyMetricDetail = DashboardSummary['keyMetricDetails'][KeyMetricId][number];
+
+const KEY_METRIC_MODAL_COPY: Record<KeyMetricId, { title: string; empty: string }> = {
+  newLeads: {
+    title: 'New Leads',
+    empty: 'No new leads are waiting right now.',
+  },
+  needsAttention: {
+    title: 'Leads Needing Attention',
+    empty: 'No lead attention items right now.',
+  },
+  followUpsDueToday: {
+    title: 'Follow-ups Due Today',
+    empty: 'No lead follow-up tasks are due today.',
+  },
+  overdueFollowUps: {
+    title: 'Overdue Follow-ups',
+    empty: 'No overdue lead follow-up tasks right now.',
+  },
+};
 
 function formatCount(value: number | null | undefined) {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -142,32 +163,35 @@ function KeyMetricCard({
   label,
   value,
   helper,
-  href,
   tone = 'default',
+  onOpen,
 }: {
   label: string;
   value: number;
   helper: string;
-  href: string;
   tone?: 'default' | 'warning' | 'critical';
+  onOpen: () => void;
 }) {
   return (
-    <Link
+    <button
+      type="button"
+      onClick={onOpen}
       className={[
-        'block rounded border p-4 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2',
+        'block w-full cursor-pointer rounded border p-4 text-left focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2',
         getMetricToneClassName(tone),
       ].join(' ')}
-      to={href}
     >
       <p className="text-sm font-medium text-gray-500">{label}</p>
       <p className="mt-3 text-3xl font-semibold text-gray-950">{formatCount(value)}</p>
       <p className="mt-2 text-sm text-gray-600">{value > 0 ? helper : 'Nothing waiting here.'}</p>
-      <p className="mt-3 text-sm font-medium text-gray-800">Open</p>
-    </Link>
+      <p className="mt-3 text-sm font-medium text-gray-800">View details</p>
+    </button>
   );
 }
 
 function KeyMetrics({ data }: { data: DashboardSummary }) {
+  const [openMetric, setOpenMetric] = useState<KeyMetricId | null>(null);
+
   return (
     <section aria-labelledby="key-metrics-title" className="space-y-3">
       <h2 id="key-metrics-title" className="text-base font-semibold text-gray-900">Key lead metrics</h2>
@@ -176,31 +200,117 @@ function KeyMetrics({ data }: { data: DashboardSummary }) {
           label="New Leads"
           value={data.keyMetrics.newLeadsCount}
           helper="Fresh leads waiting for first action."
-          href="/leads"
+          onOpen={() => setOpenMetric('newLeads')}
         />
         <KeyMetricCard
           label="Leads Needing Attention"
           value={data.keyMetrics.needsAttentionCount}
-          helper="Lead follow-ups, ownership gaps, and active follow-up statuses."
-          href="/leads"
+          helper="Unique leads with one or more issues requiring attention."
           tone={data.keyMetrics.needsAttentionCount > 0 ? 'warning' : 'default'}
+          onOpen={() => setOpenMetric('needsAttention')}
         />
         <KeyMetricCard
           label="Follow-ups Due Today"
           value={data.keyMetrics.followUpsDueTodayCount}
           helper="Lead follow-up work scheduled for today."
-          href="/today"
           tone={data.keyMetrics.followUpsDueTodayCount > 0 ? 'warning' : 'default'}
+          onOpen={() => setOpenMetric('followUpsDueToday')}
         />
         <KeyMetricCard
           label="Overdue Follow-ups"
           value={data.keyMetrics.overdueFollowUpsCount}
           helper="Lead follow-up tasks past their due date."
-          href="/tasks"
           tone={data.keyMetrics.overdueFollowUpsCount > 0 ? 'critical' : 'default'}
+          onOpen={() => setOpenMetric('overdueFollowUps')}
         />
       </div>
+
+      {openMetric ? (
+        <KeyMetricModal
+          metric={openMetric}
+          items={data.keyMetricDetails[openMetric]}
+          onClose={() => setOpenMetric(null)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function metricItemToneClassName(tone: KeyMetricDetail['tone']) {
+  if (tone === 'critical') return 'border-red-200 bg-red-50 text-red-800';
+  if (tone === 'warning') return 'border-amber-200 bg-amber-50 text-amber-800';
+  return 'border-gray-200 bg-gray-50 text-gray-700';
+}
+
+function KeyMetricModal({
+  metric,
+  items,
+  onClose,
+}: {
+  metric: KeyMetricId;
+  items: KeyMetricDetail[];
+  onClose: () => void;
+}) {
+  const copy = KEY_METRIC_MODAL_COPY[metric];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="key-metric-modal-title">
+      <div className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-xl">
+        <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4">
+          <div>
+            <h3 id="key-metric-modal-title" className="text-lg font-semibold text-gray-950">{copy.title}</h3>
+            <p className="mt-1 text-sm text-gray-600">
+              {formatCount(items.length)} {items.length === 1 ? 'item' : 'items'} represented in this metric.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="max-h-[60vh] overflow-y-auto p-5">
+          {items.length === 0 ? (
+            <p className="rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{copy.empty}</p>
+          ) : (
+            <div className="space-y-3">
+              {items.map((item) => (
+                <Link
+                  key={item.id}
+                  to={item.href}
+                  onClick={onClose}
+                  className="block rounded border border-gray-200 bg-white p-3 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-gray-950">{item.title}</p>
+                      <p className="mt-1 text-sm text-gray-600">{item.subtitle}</p>
+                      {item.dueAt ? <p className="mt-1 text-xs text-gray-500">Due {formatShortDateTime(item.dueAt)}</p> : null}
+                    </div>
+                    {item.reasons ? (
+                      <span className="flex shrink-0 flex-wrap gap-1.5 sm:justify-end">
+                        {item.reasons.map((reason) => (
+                          <span key={reason.id} className={['rounded-full border px-2.5 py-1 text-xs font-semibold', metricItemToneClassName(reason.tone)].join(' ')}>
+                            {reason.label}
+                          </span>
+                        ))}
+                      </span>
+                    ) : (
+                      <span className={['shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold', metricItemToneClassName(item.tone)].join(' ')}>
+                        {item.detail}
+                      </span>
+                    )}
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -212,7 +322,7 @@ function AttentionNeeded({ items }: { items: AttentionItem[] }) {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-gray-900">Attention Needed</h2>
-          <p className="mt-1 text-sm text-gray-600">Lead-specific work that can slow down progress.</p>
+          <p className="mt-1 text-sm text-gray-600">Breakdown of the issues currently slowing lead progress.</p>
         </div>
         <Link className="text-sm font-medium text-gray-700 underline decoration-gray-300 underline-offset-2 hover:text-gray-900" to="/today">
           Open Today
