@@ -4,9 +4,9 @@ import { AppShell } from '../components/layout/AppShell';
 import { OnboardingChecklist } from '../components/dashboard/OnboardingChecklist';
 import { useAuth } from '../context/AuthContext';
 import { useDashboard } from '../hooks/useDashboard';
-import type { DashboardLeadStatus, DashboardLeadTemperature, DashboardSummary } from '../lib/dashboard';
+import { DASHBOARD_LEAD_ATTENTION_REASONS, countAttentionReason } from '../lib/dashboard';
+import type { DashboardLeadAttentionReasonId, DashboardLeadStatus, DashboardLeadTemperature, DashboardSummary } from '../lib/dashboard';
 
-type AttentionItem = DashboardSummary['attention'][number];
 type LeadStatusRow = DashboardSummary['leadStatus'][number];
 type LeadTemperatureRow = DashboardSummary['leadTemperature'][number];
 type LeadSourceRow = DashboardSummary['leadSources'][number];
@@ -14,6 +14,12 @@ type OwnerWorkloadRow = DashboardSummary['ownership'][number];
 type RecentLeadActivity = DashboardSummary['activities']['recent'][number];
 type KeyMetricId = 'newLeads' | 'needsAttention' | 'followUpsDueToday' | 'overdueFollowUps';
 type KeyMetricDetail = DashboardSummary['keyMetricDetails'][KeyMetricId][number];
+type AttentionBreakdownItem = {
+  id: DashboardLeadAttentionReasonId;
+  label: string;
+  count: number;
+  tone: 'warning' | 'critical';
+};
 
 const KEY_METRIC_MODAL_COPY: Record<KeyMetricId, { title: string; empty: string }> = {
   newLeads: {
@@ -72,22 +78,6 @@ function formatShortDateTime(value: string) {
   }).format(date);
 }
 
-function getAttentionToneClassName(tone: AttentionItem['tone']) {
-  if (tone === 'critical') {
-    return 'border-red-200 bg-red-50 text-red-800';
-  }
-
-  if (tone === 'warning') {
-    return 'border-amber-200 bg-amber-50 text-amber-800';
-  }
-
-  if (tone === 'positive') {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-800';
-  }
-
-  return 'border-gray-200 bg-gray-50 text-gray-700';
-}
-
 function getMetricToneClassName(tone: 'default' | 'warning' | 'critical') {
   if (tone === 'critical') {
     return 'border-red-200 bg-red-50 hover:border-red-300';
@@ -98,6 +88,13 @@ function getMetricToneClassName(tone: 'default' | 'warning' | 'critical') {
   }
 
   return 'border-gray-200 bg-white hover:border-gray-400';
+}
+
+function getWorkToneClassName(tone: 'critical' | 'warning' | 'neutral' | 'positive') {
+  if (tone === 'critical') return 'border-red-200 bg-red-50 text-red-800';
+  if (tone === 'warning') return 'border-amber-200 bg-amber-50 text-amber-800';
+  if (tone === 'positive') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+  return 'border-gray-200 bg-gray-50 text-gray-700';
 }
 
 function getStatusBarClassName(status: DashboardLeadStatus) {
@@ -242,6 +239,13 @@ function metricItemToneClassName(tone: KeyMetricDetail['tone']) {
   return 'border-gray-200 bg-gray-50 text-gray-700';
 }
 
+function getAttentionBreakdown(items: KeyMetricDetail[]): AttentionBreakdownItem[] {
+  return DASHBOARD_LEAD_ATTENTION_REASONS.map((reason) => ({
+    ...reason,
+    count: countAttentionReason(items, reason.id),
+  }));
+}
+
 function KeyMetricModal({
   metric,
   items,
@@ -252,6 +256,7 @@ function KeyMetricModal({
   onClose: () => void;
 }) {
   const copy = KEY_METRIC_MODAL_COPY[metric];
+  const attentionBreakdown = metric === 'needsAttention' ? getAttentionBreakdown(items) : [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="key-metric-modal-title">
@@ -262,6 +267,9 @@ function KeyMetricModal({
             <p className="mt-1 text-sm text-gray-600">
               {formatCount(items.length)} {items.length === 1 ? 'item' : 'items'} represented in this metric.
             </p>
+            {metric === 'needsAttention' ? (
+              <p className="mt-1 text-sm text-gray-600">Each lead appears once. A lead may have more than one attention reason.</p>
+            ) : null}
           </div>
           <button
             type="button"
@@ -273,6 +281,18 @@ function KeyMetricModal({
         </div>
 
         <div className="max-h-[60vh] overflow-y-auto p-5">
+          {attentionBreakdown.length > 0 ? (
+            <div className="mb-4 flex flex-wrap gap-2">
+              <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-semibold text-gray-700">
+                All {formatCount(items.length)}
+              </span>
+              {attentionBreakdown.map((item) => (
+                <span key={item.id} className={['rounded-full border px-2.5 py-1 text-xs font-semibold', metricItemToneClassName(item.tone)].join(' ')}>
+                  {item.label}: {formatCount(item.count)}
+                </span>
+              ))}
+            </div>
+          ) : null}
           {items.length === 0 ? (
             <p className="rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{copy.empty}</p>
           ) : (
@@ -311,43 +331,6 @@ function KeyMetricModal({
         </div>
       </div>
     </div>
-  );
-}
-
-function AttentionNeeded({ items }: { items: AttentionItem[] }) {
-  const visibleItems = items.filter((item) => item.count > 0);
-
-  return (
-    <DashboardCard>
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-gray-900">Attention Needed</h2>
-          <p className="mt-1 text-sm text-gray-600">Breakdown of the issues currently slowing lead progress.</p>
-        </div>
-        <Link className="text-sm font-medium text-gray-700 underline decoration-gray-300 underline-offset-2 hover:text-gray-900" to="/today">
-          Open Today
-        </Link>
-      </div>
-      {visibleItems.length === 0 ? (
-        <p className="mt-4 rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">No lead attention items right now.</p>
-      ) : (
-        <div className="mt-4 space-y-3">
-          {visibleItems.map((item) => (
-            <Link key={item.id} to={item.href} className="block rounded border border-gray-200 bg-white p-3 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2">
-              <div className="flex items-start gap-3">
-                <span className={['mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold', getAttentionToneClassName(item.tone)].join(' ')}>
-                  {formatCount(item.count)}
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-gray-900">{item.title}</span>
-                  <span className="mt-1 block text-sm text-gray-600">{item.description}</span>
-                </span>
-              </div>
-            </Link>
-          ))}
-        </div>
-      )}
-    </DashboardCard>
   );
 }
 
@@ -440,7 +423,7 @@ function TodaysLeadWork({ followUps }: { followUps: DashboardSummary['followUps'
           <Link
             key={item.label}
             to={item.href}
-            className={['rounded border p-3 hover:bg-white focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2', getAttentionToneClassName(item.tone)].join(' ')}
+            className={['rounded border p-3 hover:bg-white focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2', getWorkToneClassName(item.tone)].join(' ')}
           >
             <p className="text-sm font-medium">{item.label}</p>
             <p className="mt-2 text-2xl font-semibold">{formatCount(item.value)}</p>
@@ -625,10 +608,7 @@ export function DashboardPage() {
           <div className="space-y-6">
             <KeyMetrics data={data} />
 
-            <div className="grid gap-4 xl:grid-cols-2">
-              <AttentionNeeded items={data.attention} />
-              <LeadPipelineOverview rows={data.leadStatus} />
-            </div>
+            <LeadPipelineOverview rows={data.leadStatus} />
 
             <div className="grid gap-4 xl:grid-cols-2">
               <TodaysLeadWork followUps={data.followUps} />

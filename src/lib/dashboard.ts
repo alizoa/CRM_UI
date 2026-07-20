@@ -55,14 +55,6 @@ export type DashboardSummary = {
     upcomingCount: number;
     completedThisWeekCount: number;
   };
-  attention: Array<{
-    id: string;
-    title: string;
-    count: number;
-    description: string;
-    tone: 'critical' | 'warning' | 'neutral' | 'positive';
-    href: string;
-  }>;
   conversion: {
     activeCount: number;
     wonCount: number;
@@ -100,6 +92,14 @@ export type DashboardLeadAttentionReason = {
   taskId?: string;
   dueAt?: string | null;
 };
+
+export const DASHBOARD_LEAD_ATTENTION_REASONS: Array<Pick<DashboardLeadAttentionReason, 'id' | 'label' | 'tone'>> = [
+  { id: 'OVERDUE_FOLLOW_UP', label: 'Overdue follow-up', tone: 'critical' },
+  { id: 'FOLLOW_UP_DUE_TODAY', label: 'Follow-up due today', tone: 'warning' },
+  { id: 'UNASSIGNED_LEAD', label: 'Unassigned', tone: 'warning' },
+  { id: 'NO_ACTIVE_FOLLOW_UP', label: 'No active follow-up', tone: 'warning' },
+  { id: 'HOT_LEAD_WITHOUT_OPEN_TASK', label: 'Hot lead without open tasks', tone: 'warning' },
+];
 
 const ACTIVE_STATUSES: DashboardLeadStatus[] = ['NEW', 'CONTACTED', 'FOLLOW_UP_NEEDED', 'QUALIFIED'];
 const STATUS_LABELS: Record<DashboardLeadStatus, string> = {
@@ -202,6 +202,16 @@ function taskMetricItem(
   };
 }
 
+function attentionReason(id: DashboardLeadAttentionReasonId, overrides: Partial<DashboardLeadAttentionReason> = {}): DashboardLeadAttentionReason {
+  const definition = DASHBOARD_LEAD_ATTENTION_REASONS.find((reason) => reason.id === id);
+  return {
+    id,
+    label: definition?.label ?? id,
+    tone: definition?.tone ?? 'warning',
+    ...overrides,
+  };
+}
+
 function selectLeadAttentionItems(activeLeads: Lead[], leadTasks: Task[]): DashboardMetricItem[] {
   const openLeadTasks = leadTasks.filter(isOpenTask);
   const openFollowUpTasks = leadTasks.filter(isOpenFollowUpTask);
@@ -223,36 +233,30 @@ function selectLeadAttentionItems(activeLeads: Lead[], leadTasks: Task[]): Dashb
 
     if (followUpTasks.some((task) => getDueBucket(task) === 'overdue')) {
       const task = followUpTasks.find((item) => getDueBucket(item) === 'overdue');
-      reasons.push({
-        id: 'OVERDUE_FOLLOW_UP',
-        label: 'Overdue follow-up',
-        tone: 'critical',
+      reasons.push(attentionReason('OVERDUE_FOLLOW_UP', {
         taskId: task?.id,
         dueAt: task?.dueAt,
-      });
+      }));
     }
 
     if (followUpTasks.some((task) => getDueBucket(task) === 'today')) {
       const task = followUpTasks.find((item) => getDueBucket(item) === 'today');
-      reasons.push({
-        id: 'FOLLOW_UP_DUE_TODAY',
-        label: 'Follow-up due today',
-        tone: 'warning',
+      reasons.push(attentionReason('FOLLOW_UP_DUE_TODAY', {
         taskId: task?.id,
         dueAt: task?.dueAt,
-      });
+      }));
     }
 
     if (!lead.ownerId) {
-      reasons.push({ id: 'UNASSIGNED_LEAD', label: 'Unassigned', tone: 'warning' });
+      reasons.push(attentionReason('UNASSIGNED_LEAD'));
     }
 
     if (followUpTasks.length === 0) {
-      reasons.push({ id: 'NO_ACTIVE_FOLLOW_UP', label: 'No active follow-up', tone: 'warning' });
+      reasons.push(attentionReason('NO_ACTIVE_FOLLOW_UP'));
     }
 
     if (lead.temperature === 'HOT' && openTasks.length === 0) {
-      reasons.push({ id: 'HOT_LEAD_WITHOUT_OPEN_TASK', label: 'Hot lead without open tasks', tone: 'warning' });
+      reasons.push(attentionReason('HOT_LEAD_WITHOUT_OPEN_TASK'));
     }
 
     if (reasons.length === 0) return [];
@@ -271,7 +275,7 @@ function selectLeadAttentionItems(activeLeads: Lead[], leadTasks: Task[]): Dashb
   });
 }
 
-function countAttentionReason(items: DashboardMetricItem[], reasonId: DashboardLeadAttentionReasonId) {
+export function countAttentionReason(items: DashboardMetricItem[], reasonId: DashboardLeadAttentionReasonId) {
   return items.filter((item) => item.reasons?.some((reason) => reason.id === reasonId)).length;
 }
 
@@ -366,48 +370,6 @@ async function buildDashboardSummary(token: string): Promise<DashboardSummary> {
       upcomingCount: upcomingFollowUps.length,
       completedThisWeekCount: completedLeadTasks.length,
     },
-    attention: [
-      {
-        id: 'overdue-followups',
-        title: 'Overdue follow-ups',
-        count: countAttentionReason(attentionItems, 'OVERDUE_FOLLOW_UP'),
-        description: 'Lead follow-up tasks past their due date.',
-        tone: overdueFollowUps.length > 0 ? 'critical' : 'positive',
-        href: '/tasks',
-      },
-      {
-        id: 'today-followups',
-        title: 'Follow-ups due today',
-        count: countAttentionReason(attentionItems, 'FOLLOW_UP_DUE_TODAY'),
-        description: 'Lead work scheduled for today.',
-        tone: dueTodayFollowUps.length > 0 ? 'warning' : 'positive',
-        href: '/today',
-      },
-      {
-        id: 'unassigned-leads',
-        title: 'Unassigned leads',
-        count: countAttentionReason(attentionItems, 'UNASSIGNED_LEAD'),
-        description: 'Active leads waiting for an owner.',
-        tone: unassignedLeads.length > 0 ? 'warning' : 'positive',
-        href: '/leads',
-      },
-      {
-        id: 'no-active-follow-up',
-        title: 'No active follow-up',
-        count: countAttentionReason(attentionItems, 'NO_ACTIVE_FOLLOW_UP'),
-        description: 'Active leads without an open follow-up task.',
-        tone: countAttentionReason(attentionItems, 'NO_ACTIVE_FOLLOW_UP') > 0 ? 'neutral' : 'positive',
-        href: '/leads',
-      },
-      {
-        id: 'hot-no-task',
-        title: 'Hot leads without open tasks',
-        count: countAttentionReason(attentionItems, 'HOT_LEAD_WITHOUT_OPEN_TASK'),
-        description: 'High-priority leads that need a planned follow-up.',
-        tone: countAttentionReason(attentionItems, 'HOT_LEAD_WITHOUT_OPEN_TASK') > 0 ? 'warning' : 'positive',
-        href: '/leads',
-      },
-    ],
     conversion: {
       activeCount: activeLeads.length,
       wonCount: leads.filter((lead) => lead.status === 'WON').length,
