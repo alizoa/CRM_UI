@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { ChevronDown, ListFilter, RotateCcw, Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { TaskCalendarView } from '../components/tasks/TaskCalendarView';
@@ -30,15 +31,16 @@ type RequestError = {
   message: string;
 };
 
-type CompletedFilter = 'all' | 'open' | 'completed';
-type AssigneeFilter = 'me' | 'all';
-type EntityTypeFilter = 'all' | EntityType;
-type StatusFilter = 'all' | TaskStatus;
-type DueBucketFilter = 'all' | TaskDueBucket;
+type CompletionFilter = 'open' | 'completed';
+type AssigneeFilterValue = string;
 type LocalDueBucket = TaskDueBucket | 'completed';
 type TaskViewMode = 'daily' | 'table' | 'kanban' | 'calendar';
 type TaskSortKey = 'dueAt' | 'title' | 'lead' | 'assignee' | 'status';
 type TaskSortDirection = 'asc' | 'desc';
+type TaskKpiId = 'overdue' | 'today' | 'inProgress' | 'waiting';
+type TaskKpiTone = 'critical' | 'warning' | 'active' | 'neutral';
+type TaskPresetId = 'MY_OPEN' | 'OVERDUE' | 'TODAY' | 'IN_PROGRESS' | 'WAITING' | 'ALL' | 'CUSTOM';
+type TaskFilterMenu = 'assignee' | 'status' | 'due' | 'completion' | 'preset';
 
 type TaskFormState = {
   title: string;
@@ -52,11 +54,7 @@ type TaskFormState = {
 const TASKS_PAGE_LIMIT = 100;
 const CALENDAR_TASKS_LIMIT = 500;
 const TASK_OPTIONS_LIMIT = 100;
-const DEFAULT_COMPLETED_FILTER: CompletedFilter = 'open';
-const DEFAULT_ASSIGNEE_FILTER: AssigneeFilter = 'me';
-const DEFAULT_ENTITY_TYPE_FILTER: EntityTypeFilter = 'LEAD';
-const DEFAULT_STATUS_FILTER: StatusFilter = 'all';
-const DEFAULT_DUE_BUCKET_FILTER: DueBucketFilter = 'all';
+const UNASSIGNED_ASSIGNEE_VALUE = '__unassigned';
 const TASK_VIEW_STORAGE_KEY = 'alozix.tasks.view';
 const ACTIVE_TASK_LEAD_STATUSES = new Set(['NEW', 'CONTACTED', 'FOLLOW_UP_NEEDED', 'QUALIFIED']);
 const INITIAL_TASK_FORM: TaskFormState = {
@@ -101,6 +99,58 @@ const SORT_LABELS: Record<TaskSortKey, string> = {
   assignee: 'Assignee',
   status: 'Status',
 };
+
+const TASK_KPI_COPY: Record<TaskKpiId, { title: string; modalTitle: string; empty: string }> = {
+  overdue: {
+    title: 'Overdue',
+    modalTitle: 'Overdue Tasks',
+    empty: 'No overdue tasks.',
+  },
+  today: {
+    title: 'Due Today',
+    modalTitle: 'Tasks Due Today',
+    empty: 'No tasks are due today.',
+  },
+  inProgress: {
+    title: 'In Progress',
+    modalTitle: 'Tasks In Progress',
+    empty: 'No tasks are currently in progress.',
+  },
+  waiting: {
+    title: 'Waiting',
+    modalTitle: 'Waiting Tasks',
+    empty: 'No tasks are waiting.',
+  },
+};
+
+const TASK_STATUS_OPTIONS: Array<{ label: string; value: TaskStatus }> = [
+  { label: 'To do', value: 'TODO' },
+  { label: 'In progress', value: 'IN_PROGRESS' },
+  { label: 'Waiting', value: 'WAITING' },
+  { label: 'Done', value: 'DONE' },
+];
+
+const TASK_DUE_OPTIONS: Array<{ label: string; value: TaskDueBucket }> = [
+  { label: 'Overdue', value: 'overdue' },
+  { label: 'Today', value: 'today' },
+  { label: 'Upcoming', value: 'upcoming' },
+  { label: 'No due date', value: 'no_due_date' },
+];
+
+const TASK_COMPLETION_OPTIONS: Array<{ label: string; value: CompletionFilter }> = [
+  { label: 'Open', value: 'open' },
+  { label: 'Completed', value: 'completed' },
+];
+
+const TASK_PRESET_OPTIONS: Array<{ label: string; value: TaskPresetId }> = [
+  { label: 'My Open Tasks', value: 'MY_OPEN' },
+  { label: 'Overdue Tasks', value: 'OVERDUE' },
+  { label: 'Due Today', value: 'TODAY' },
+  { label: 'In Progress', value: 'IN_PROGRESS' },
+  { label: 'Waiting', value: 'WAITING' },
+  { label: 'All Tasks', value: 'ALL' },
+  { label: 'Custom', value: 'CUSTOM' },
+];
 
 function formatTaskCount(count: number) {
   return count === 1 ? '1 task' : `${count} tasks`;
@@ -386,54 +436,6 @@ function getRecordPickerMessage(
   return `Showing up to the first ${TASK_OPTIONS_LIMIT} loaded ${pluralLabel}. Use search to filter this list.`;
 }
 
-function getCompletionFilterValue(filter: CompletedFilter) {
-  if (filter === 'open') {
-    return false;
-  }
-
-  if (filter === 'completed') {
-    return true;
-  }
-
-  return undefined;
-}
-
-function getCalendarMonthRange(month: Date) {
-  const from = new Date(month.getFullYear(), month.getMonth(), 1);
-  const to = new Date(month.getFullYear(), month.getMonth() + 1, 1);
-
-  return {
-    from: from.toISOString(),
-    to: to.toISOString(),
-  };
-}
-
-function mergeUniqueTasks(primary: Task[], secondary: Task[]) {
-  return Array.from(new Map([...primary, ...secondary].map((task) => [task.id, task])).values());
-}
-
-function getFilterSummary(
-  completedFilter: CompletedFilter,
-  assigneeFilter: AssigneeFilter,
-  _entityTypeFilter: EntityTypeFilter,
-  statusFilter: StatusFilter,
-  dueBucketFilter: DueBucketFilter,
-) {
-  const assigneeLabel = assigneeFilter === 'me' ? 'My' : 'All visible';
-  const completionLabel =
-    completedFilter === 'open' ? 'open tasks' : completedFilter === 'completed' ? 'completed tasks' : 'tasks';
-  const entityLabel = 'lead ';
-  const statusLabel = statusFilter === 'all' ? '' : ` with status ${STATUS_LABELS[statusFilter].toLowerCase()}`;
-  const dueLabel =
-    dueBucketFilter === 'all'
-      ? ''
-      : dueBucketFilter === 'no_due_date'
-        ? ' with no due date'
-        : ` due ${SECTION_LABELS[dueBucketFilter].toLowerCase()}`;
-
-  return `Showing ${assigneeLabel.toLowerCase()} ${entityLabel}${completionLabel}${statusLabel}${dueLabel}`;
-}
-
 function getTaskActionError(error: unknown) {
   const requestError = toRequestError(error, 'Could not update task.');
 
@@ -588,16 +590,20 @@ function getStatusClassName(status: TaskStatus) {
   return 'rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700';
 }
 
-function groupTasks(tasks: Task[], completionFilter: CompletedFilter, dueBucketFilter: DueBucketFilter) {
+function groupTasks(tasks: Task[], selectedCompletionFilters: CompletionFilter[], selectedDueBuckets: TaskDueBucket[]) {
   const groups = new Map<LocalDueBucket, Task[]>();
+  const completionSet = new Set(selectedCompletionFilters);
+  const dueSet = new Set(selectedDueBuckets);
+  const onlyCompleted = completionSet.size === 1 && completionSet.has('completed');
+  const includeCompleted = completionSet.size === 0 || completionSet.has('completed');
   const sectionOrder =
-    completionFilter === 'completed'
+    onlyCompleted
       ? (['completed'] as LocalDueBucket[])
-      : dueBucketFilter === 'all'
+      : dueSet.size === 0
         ? [...OPEN_SECTION_ORDER]
-        : ([dueBucketFilter] as LocalDueBucket[]);
+        : OPEN_SECTION_ORDER.filter((bucket) => dueSet.has(bucket as TaskDueBucket));
 
-  if (completionFilter === 'all' && dueBucketFilter === 'all') {
+  if (!onlyCompleted && includeCompleted && dueSet.size === 0) {
     sectionOrder.push('completed');
   }
 
@@ -637,20 +643,205 @@ function getSectionHelper(bucket: LocalDueBucket, taskCount: number) {
   return taskCount > 0 ? 'Recently finished work in this view.' : 'No completed tasks in this view.';
 }
 
-function hasActiveFilters(
-  completedFilter: CompletedFilter,
-  assigneeFilter: AssigneeFilter,
-  entityTypeFilter: EntityTypeFilter,
-  statusFilter: StatusFilter,
-  dueBucketFilter: DueBucketFilter,
+function arraysEqual<T extends string>(left: T[], right: T[]) {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
+}
+
+function selectedCountLabel(count: number) {
+  return count > 0 ? String(count) : 'Any';
+}
+
+function getTaskPresetLabel(preset: TaskPresetId) {
+  return TASK_PRESET_OPTIONS.find((option) => option.value === preset)?.label ?? 'Custom';
+}
+
+function getDueLabel(value: TaskDueBucket) {
+  return TASK_DUE_OPTIONS.find((option) => option.value === value)?.label ?? SECTION_LABELS[value];
+}
+
+function getCompletionLabel(value: CompletionFilter) {
+  return TASK_COMPLETION_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
+function getPresetFilters(preset: Exclude<TaskPresetId, 'CUSTOM'>, currentUserId?: string | null) {
+  const myAssignees = currentUserId ? [currentUserId] : [];
+
+  if (preset === 'MY_OPEN') {
+    return {
+      assigneeValues: myAssignees,
+      statusFilters: [] as TaskStatus[],
+      dueFilters: [] as TaskDueBucket[],
+      completionFilters: ['open'] as CompletionFilter[],
+    };
+  }
+
+  if (preset === 'OVERDUE') {
+    return {
+      assigneeValues: [] as AssigneeFilterValue[],
+      statusFilters: [] as TaskStatus[],
+      dueFilters: ['overdue'] as TaskDueBucket[],
+      completionFilters: ['open'] as CompletionFilter[],
+    };
+  }
+
+  if (preset === 'TODAY') {
+    return {
+      assigneeValues: [] as AssigneeFilterValue[],
+      statusFilters: [] as TaskStatus[],
+      dueFilters: ['today'] as TaskDueBucket[],
+      completionFilters: ['open'] as CompletionFilter[],
+    };
+  }
+
+  if (preset === 'IN_PROGRESS') {
+    return {
+      assigneeValues: [] as AssigneeFilterValue[],
+      statusFilters: ['IN_PROGRESS'] as TaskStatus[],
+      dueFilters: [] as TaskDueBucket[],
+      completionFilters: [] as CompletionFilter[],
+    };
+  }
+
+  if (preset === 'WAITING') {
+    return {
+      assigneeValues: [] as AssigneeFilterValue[],
+      statusFilters: ['WAITING'] as TaskStatus[],
+      dueFilters: [] as TaskDueBucket[],
+      completionFilters: ['open'] as CompletionFilter[],
+    };
+  }
+
+  return {
+    assigneeValues: [] as AssigneeFilterValue[],
+    statusFilters: [] as TaskStatus[],
+    dueFilters: [] as TaskDueBucket[],
+    completionFilters: [] as CompletionFilter[],
+  };
+}
+
+function getMatchingPreset(
+  assigneeValues: AssigneeFilterValue[],
+  statusFilters: TaskStatus[],
+  dueFilters: TaskDueBucket[],
+  completionFilters: CompletionFilter[],
+  currentUserId?: string | null,
+): TaskPresetId {
+  const presets: Array<Exclude<TaskPresetId, 'CUSTOM'>> = ['MY_OPEN', 'OVERDUE', 'TODAY', 'IN_PROGRESS', 'WAITING', 'ALL'];
+
+  for (const preset of presets) {
+    const filters = getPresetFilters(preset, currentUserId);
+    if (
+      arraysEqual(assigneeValues, filters.assigneeValues) &&
+      arraysEqual(statusFilters, filters.statusFilters) &&
+      arraysEqual(dueFilters, filters.dueFilters) &&
+      arraysEqual(completionFilters, filters.completionFilters)
+    ) {
+      return preset;
+    }
+  }
+
+  return 'CUSTOM';
+}
+
+function hasTaskFilterSelections(
+  assigneeValues: AssigneeFilterValue[],
+  statusFilters: TaskStatus[],
+  dueFilters: TaskDueBucket[],
+  completionFilters: CompletionFilter[],
 ) {
-  return (
-    completedFilter !== DEFAULT_COMPLETED_FILTER ||
-    assigneeFilter !== DEFAULT_ASSIGNEE_FILTER ||
-    entityTypeFilter !== DEFAULT_ENTITY_TYPE_FILTER ||
-    statusFilter !== DEFAULT_STATUS_FILTER ||
-    dueBucketFilter !== DEFAULT_DUE_BUCKET_FILTER
-  );
+  return assigneeValues.length > 0 || statusFilters.length > 0 || dueFilters.length > 0 || completionFilters.length > 0;
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat().format(value);
+}
+
+function getTaskKpiHelper(id: TaskKpiId, count: number) {
+  if (id === 'overdue') {
+    return 'Start here first.';
+  }
+
+  if (id === 'today') {
+    return count > 0 ? 'Scheduled for today.' : 'No tasks due today.';
+  }
+
+  if (id === 'inProgress') {
+    return count > 0 ? 'Currently being worked.' : 'No tasks in progress.';
+  }
+
+  return count > 0 ? 'Blocked on a reply or next step.' : 'No tasks waiting.';
+}
+
+function getTaskKpiTone(id: TaskKpiId, count: number): TaskKpiTone {
+  if (id === 'overdue') {
+    return count > 0 ? 'critical' : 'neutral';
+  }
+
+  if (id === 'today') {
+    return count > 0 ? 'warning' : 'neutral';
+  }
+
+  if (id === 'inProgress') {
+    return count > 0 ? 'active' : 'neutral';
+  }
+
+  if (id === 'waiting') {
+    return count > 0 ? 'warning' : 'neutral';
+  }
+
+  return 'neutral';
+}
+
+function getTaskKpiClassName(tone: TaskKpiTone) {
+  const base =
+    'block min-h-[100px] w-full rounded border px-3 py-2.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2';
+
+  if (tone === 'critical') {
+    return `${base} border-red-200 bg-red-50 hover:border-red-300 hover:bg-red-100/60`;
+  }
+
+  if (tone === 'warning') {
+    return `${base} border-amber-200 bg-amber-50 hover:border-amber-300 hover:bg-amber-100/60`;
+  }
+
+  if (tone === 'active') {
+    return `${base} border-blue-200 bg-blue-50 hover:border-blue-300 hover:bg-blue-100/60`;
+  }
+
+  return `${base} border-gray-200 bg-white hover:border-gray-400 hover:bg-gray-50`;
+}
+
+function getTaskKpiAccentClassName(tone: TaskKpiTone) {
+  if (tone === 'critical') return 'bg-red-600';
+  if (tone === 'warning') return 'bg-amber-500';
+  if (tone === 'active') return 'bg-blue-600';
+  return 'bg-gray-300';
+}
+
+function getTaskKpiSubtitle(id: TaskKpiId, count: number) {
+  if (count === 0) {
+    if (id === 'overdue') return 'No overdue tasks';
+    if (id === 'today') return 'No tasks due today';
+    if (id === 'inProgress') return 'No tasks in progress';
+    return 'No waiting tasks';
+  }
+
+  const taskWord = count === 1 ? 'task' : 'tasks';
+
+  if (id === 'overdue') return `${formatNumber(count)} overdue ${taskWord}`;
+  if (id === 'today') return `${formatNumber(count)} ${taskWord} due today`;
+  if (id === 'inProgress') return `${formatNumber(count)} ${taskWord} in progress`;
+  return `${formatNumber(count)} waiting ${taskWord}`;
+}
+
+function getFocusableElements(container: HTMLElement) {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => !element.hasAttribute('disabled') && element.getAttribute('aria-hidden') !== 'true');
 }
 
 export function TasksPage() {
@@ -658,12 +849,13 @@ export function TasksPage() {
   const [tasksData, setTasksData] = useState<TasksResponse | null>(null);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState<RequestError | null>(null);
-  const [completedFilter, setCompletedFilter] = useState<CompletedFilter>(DEFAULT_COMPLETED_FILTER);
-  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>(DEFAULT_ASSIGNEE_FILTER);
-  const [entityTypeFilter, setEntityTypeFilter] = useState<EntityTypeFilter>(DEFAULT_ENTITY_TYPE_FILTER);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(DEFAULT_STATUS_FILTER);
-  const [dueBucketFilter, setDueBucketFilter] = useState<DueBucketFilter>(DEFAULT_DUE_BUCKET_FILTER);
+  const [selectedAssigneeValues, setSelectedAssigneeValues] = useState<AssigneeFilterValue[]>(() => (user?.id ? [user.id] : []));
+  const [selectedStatusFilters, setSelectedStatusFilters] = useState<TaskStatus[]>([]);
+  const [selectedDueFilters, setSelectedDueFilters] = useState<TaskDueBucket[]>([]);
+  const [selectedCompletionFilters, setSelectedCompletionFilters] = useState<CompletionFilter[]>(['open']);
   const [taskSearch, setTaskSearch] = useState('');
+  const [moreTaskFiltersOpen, setMoreTaskFiltersOpen] = useState(false);
+  const [openTaskFilterMenu, setOpenTaskFilterMenu] = useState<TaskFilterMenu | null>(null);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
     upcoming: false,
     no_due_date: false,
@@ -690,51 +882,22 @@ export function TasksPage() {
   const [createError, setCreateError] = useState<RequestError | null>(null);
   const [createSuccess, setCreateSuccess] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [openTaskKpi, setOpenTaskKpi] = useState<TaskKpiId | null>(null);
+  const taskKpiOpenerRef = useRef<HTMLButtonElement | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [memberships, setMemberships] = useState<MembershipOption[]>([]);
   const [optionsLoading, setOptionsLoading] = useState(false);
   const [optionWarnings, setOptionWarnings] = useState<string[]>([]);
-  const calendarRange = useMemo(() => getCalendarMonthRange(calendarMonth), [calendarMonth]);
-  const baseTaskFilters = useMemo<Omit<TaskFilters, 'page' | 'limit' | 'from' | 'to' | 'dueBucket'>>(
-    () => ({
-      completed: getCompletionFilterValue(completedFilter),
-      assigneeId: assigneeFilter === 'me' ? user?.id : undefined,
-      entityType: 'LEAD',
-      status: statusFilter === 'all' ? undefined : statusFilter,
-    }),
-    [assigneeFilter, completedFilter, statusFilter, user?.id],
-  );
-
   const taskFilters = useMemo<TaskFilters>(
-    () => {
-      if (viewMode === 'calendar') {
-        return {
-          ...baseTaskFilters,
-          dueBucket: dueBucketFilter === 'all' ? undefined : dueBucketFilter,
-          page: 1,
-          limit: CALENDAR_TASKS_LIMIT,
-          ...(dueBucketFilter === 'no_due_date' ? {} : calendarRange),
-        };
-      }
-
-      return {
-        ...baseTaskFilters,
-        dueBucket: dueBucketFilter === 'all' ? undefined : dueBucketFilter,
-        page,
-        limit: TASKS_PAGE_LIMIT,
-      };
-    },
-    [baseTaskFilters, calendarRange, dueBucketFilter, page, viewMode],
+    () => ({
+      entityType: 'LEAD',
+      page: 1,
+      limit: CALENDAR_TASKS_LIMIT,
+    }),
+    [],
   );
-  const calendarNoDueFilters = useMemo<TaskFilters | null>(() => {
-    if (viewMode !== 'calendar' || dueBucketFilter !== 'all') {
-      return null;
-    }
-
-    return { ...baseTaskFilters, dueBucket: 'no_due_date', page: 1, limit: CALENDAR_TASKS_LIMIT };
-  }, [baseTaskFilters, dueBucketFilter, viewMode]);
 
   const contactsById = useMemo(() => new Map(contacts.map((contact) => [contact.id, contact])), [contacts]);
   const dealsById = useMemo(() => new Map(deals.map((deal) => [deal.id, deal])), [deals]);
@@ -742,73 +905,111 @@ export function TasksPage() {
   const membershipsByUserId = useMemo(() => new Map(memberships.map((membership) => [membership.userId, membership])), [memberships]);
   const tasks = tasksData?.data ?? [];
   const normalizedTaskSearch = normalizeSearch(taskSearch);
+  const activeTaskPreset = getMatchingPreset(
+    selectedAssigneeValues,
+    selectedStatusFilters,
+    selectedDueFilters,
+    selectedCompletionFilters,
+    user?.id,
+  );
+  const activeSecondaryFilterCount = selectedStatusFilters.length + selectedDueFilters.length + selectedCompletionFilters.length;
+  const hasActiveTaskFilters = hasTaskFilterSelections(
+    selectedAssigneeValues,
+    selectedStatusFilters,
+    selectedDueFilters,
+    selectedCompletionFilters,
+  );
   const visibleTasks = useMemo(() => {
-    const activeLeadTasks = tasks.filter((task) => {
+    return tasks.filter((task) => {
       const lead = leadsById.get(task.entityId);
-      return !lead || ACTIVE_TASK_LEAD_STATUSES.has(lead.status);
+      if (lead && !ACTIVE_TASK_LEAD_STATUSES.has(lead.status)) return false;
+
+      if (selectedAssigneeValues.length > 0) {
+        const assigneeValue = task.assigneeId ?? UNASSIGNED_ASSIGNEE_VALUE;
+        if (!selectedAssigneeValues.includes(assigneeValue)) return false;
+      }
+
+      if (selectedStatusFilters.length > 0 && !selectedStatusFilters.includes(task.status)) return false;
+
+      if (selectedCompletionFilters.length > 0) {
+        const completionValue: CompletionFilter = isTaskCompleted(task) ? 'completed' : 'open';
+        if (!selectedCompletionFilters.includes(completionValue)) return false;
+      }
+
+      if (selectedDueFilters.length > 0 && !selectedDueFilters.includes(getLocalDueBucket(task) as TaskDueBucket)) return false;
+
+      if (normalizedTaskSearch) {
+        const searchText = joinOptionParts([
+          task.title,
+          task.description,
+          getTaskEntityLabel(task, contactsById, dealsById, leadsById),
+          lead?.email,
+          lead?.phone,
+          lead?.source,
+          lead?.sourceDetail,
+        ]).toLowerCase();
+
+        if (!searchText.includes(normalizedTaskSearch)) return false;
+      }
+
+      return true;
     });
-
-    if (!normalizedTaskSearch) {
-      return activeLeadTasks;
-    }
-
-    return activeLeadTasks.filter((task) => {
-      const lead = leadsById.get(task.entityId);
-      const searchText = joinOptionParts([
-        task.title,
-        task.description,
-        getTaskEntityLabel(task, contactsById, dealsById, leadsById),
-        lead?.email,
-        lead?.phone,
-        lead?.source,
-        lead?.sourceDetail,
-      ]).toLowerCase();
-
-      return searchText.includes(normalizedTaskSearch);
-    });
-  }, [contactsById, dealsById, leadsById, normalizedTaskSearch, tasks]);
-  const totalTasks = tasksData?.total ?? tasks.length;
-  const currentPage = tasksData?.page ?? page;
-  const currentLimit = tasksData?.limit ?? TASKS_PAGE_LIMIT;
-  const totalPages = Math.max(1, Math.ceil(totalTasks / currentLimit));
+  }, [
+    contactsById,
+    dealsById,
+    leadsById,
+    normalizedTaskSearch,
+    selectedAssigneeValues,
+    selectedCompletionFilters,
+    selectedDueFilters,
+    selectedStatusFilters,
+    tasks,
+  ]);
+  const totalTasks = visibleTasks.length;
+  const currentPage = 1;
+  const currentLimit = Math.max(totalTasks, TASKS_PAGE_LIMIT);
+  const totalPages = 1;
   const hasPreviousPage = currentPage > 1;
   const hasNextPage = currentPage * currentLimit < totalTasks;
   const groupedTasks = useMemo(
-    () => groupTasks(visibleTasks, completedFilter, dueBucketFilter),
-    [completedFilter, dueBucketFilter, visibleTasks],
+    () => groupTasks(visibleTasks, selectedCompletionFilters, selectedDueFilters),
+    [selectedCompletionFilters, selectedDueFilters, visibleTasks],
   );
   const sortedTasks = useMemo(
     () => sortTasks(visibleTasks, sortKey, sortDirection, membershipsByUserId, leadsById),
     [leadsById, membershipsByUserId, sortDirection, sortKey, visibleTasks],
   );
-  const visibleBucketCounts = useMemo(() => {
-    const counts: Record<LocalDueBucket, number> = {
-      overdue: 0,
-      today: 0,
-      upcoming: 0,
-      no_due_date: 0,
-      completed: 0,
-    };
-
-    for (const task of visibleTasks) {
-      counts[getLocalDueBucket(task)] += 1;
-    }
-
-    return counts;
-  }, [visibleTasks]);
-  const myDaySummary = useMemo(
+  const unfilteredTaskKpiCollections = useMemo<Record<TaskKpiId, Task[]>>(
     () => ({
-      overdue: visibleBucketCounts.overdue,
-      today: visibleBucketCounts.today,
-      inProgress: visibleTasks.filter((task) => task.status === 'IN_PROGRESS').length,
-      waiting: visibleTasks.filter((task) => task.status === 'WAITING').length,
+      overdue: tasks.filter((task) => getLocalDueBucket(task) === 'overdue'),
+      today: tasks.filter((task) => getLocalDueBucket(task) === 'today'),
+      inProgress: tasks.filter((task) => task.status === 'IN_PROGRESS'),
+      waiting: tasks.filter((task) => task.status === 'WAITING'),
     }),
-    [visibleBucketCounts.overdue, visibleBucketCounts.today, visibleTasks],
+    [tasks],
   );
-  const filterSummary = getFilterSummary(completedFilter, assigneeFilter, entityTypeFilter, statusFilter, dueBucketFilter);
   const currentUserMembership = useMemo(
     () => (user?.id ? memberships.find((membership) => membership.userId === user.id) : undefined),
     [memberships, user?.id],
+  );
+  const assigneeFilterOptions = useMemo(() => {
+    const options: Array<{ label: string; value: AssigneeFilterValue }> = [];
+
+    if (user?.id) {
+      options.push({ label: 'Me', value: user.id });
+    }
+
+    for (const membership of memberships) {
+      if (membership.userId === user?.id) continue;
+      options.push({ label: getMembershipName(membership), value: membership.userId });
+    }
+
+    options.push({ label: 'Unassigned', value: UNASSIGNED_ASSIGNEE_VALUE });
+    return options;
+  }, [memberships, user?.id]);
+  const assigneeFilterLabelsByValue = useMemo(
+    () => new Map(assigneeFilterOptions.map((option) => [option.value, option.label])),
+    [assigneeFilterOptions],
   );
 
   useEffect(() => {
@@ -877,7 +1078,7 @@ export function TasksPage() {
   }, [currentUserMembership]);
 
   useEffect(() => {
-    if (!accessToken || (assigneeFilter === 'me' && !user?.id)) {
+    if (!accessToken) {
       setTasksData(null);
       setTasksLoading(false);
       setTasksError(null);
@@ -892,23 +1093,12 @@ export function TasksPage() {
       setTasksError(null);
 
       try {
-        const [response, noDueDateResponse] = await Promise.all([
-          listTasks(token, taskFilters),
-          calendarNoDueFilters ? listTasks(token, calendarNoDueFilters) : Promise.resolve(null),
-        ]);
+        const response = await listTasks(token, taskFilters);
         if (!active) {
           return;
         }
 
-        setTasksData(
-          noDueDateResponse
-            ? {
-                ...response,
-                data: mergeUniqueTasks(response.data, noDueDateResponse.data),
-                total: response.total + noDueDateResponse.total,
-              }
-            : response,
-        );
+        setTasksData(response);
       } catch (requestError) {
         if (!active) {
           return;
@@ -928,21 +1118,26 @@ export function TasksPage() {
     return () => {
       active = false;
     };
-  }, [accessToken, assigneeFilter, calendarNoDueFilters, refreshKey, taskFilters, user?.id]);
+  }, [accessToken, refreshKey, taskFilters]);
 
   const refreshTasks = () => {
     setRefreshKey((current) => current + 1);
+  };
+
+  const openTaskKpiModal = (kpi: TaskKpiId, opener: HTMLButtonElement) => {
+    taskKpiOpenerRef.current = opener;
+    setOpenTaskKpi(kpi);
+  };
+
+  const closeTaskKpiModal = () => {
+    setOpenTaskKpi(null);
+    window.setTimeout(() => taskKpiOpenerRef.current?.focus(), 0);
   };
 
   const handleViewModeChange = (nextViewMode: TaskViewMode) => {
     setViewMode(nextViewMode);
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(TASK_VIEW_STORAGE_KEY, nextViewMode);
-    }
-
-    if (nextViewMode === 'kanban') {
-      setCompletedFilter('open');
-      setPage(1);
     }
 
     if (nextViewMode === 'calendar') {
@@ -969,41 +1164,56 @@ export function TasksPage() {
     setCreateSuccess(null);
   };
 
-  const handleResetFilters = () => {
-    setCompletedFilter(DEFAULT_COMPLETED_FILTER);
-    setAssigneeFilter(DEFAULT_ASSIGNEE_FILTER);
-    setEntityTypeFilter(DEFAULT_ENTITY_TYPE_FILTER);
-    setStatusFilter(DEFAULT_STATUS_FILTER);
-    setDueBucketFilter(DEFAULT_DUE_BUCKET_FILTER);
+  const handleClearTaskFilters = () => {
+    setSelectedAssigneeValues([]);
+    setSelectedStatusFilters([]);
+    setSelectedDueFilters([]);
+    setSelectedCompletionFilters([]);
     setTaskSearch('');
+    setOpenTaskFilterMenu(null);
     setPage(1);
   };
 
-  const applyQuickFilter = (
-    nextFilters: Partial<{
-      completedFilter: CompletedFilter;
-      assigneeFilter: AssigneeFilter;
-      entityTypeFilter: EntityTypeFilter;
-      statusFilter: StatusFilter;
-      dueBucketFilter: DueBucketFilter;
-    }>,
-  ) => {
-    if (nextFilters.completedFilter) {
-      setCompletedFilter(nextFilters.completedFilter);
+  const applyTaskPreset = (preset: TaskPresetId) => {
+    if (preset === 'CUSTOM') {
+      setOpenTaskFilterMenu(null);
+      return;
     }
 
-    if (nextFilters.assigneeFilter) {
-      setAssigneeFilter(nextFilters.assigneeFilter);
-    }
+    const presetFilters = getPresetFilters(preset, user?.id);
+    setSelectedAssigneeValues(presetFilters.assigneeValues);
+    setSelectedStatusFilters(presetFilters.statusFilters);
+    setSelectedDueFilters(presetFilters.dueFilters);
+    setSelectedCompletionFilters(presetFilters.completionFilters);
+    setOpenTaskFilterMenu(null);
+    setPage(1);
+  };
 
-    if (nextFilters.statusFilter) {
-      setStatusFilter(nextFilters.statusFilter);
-    }
+  const toggleAssigneeFilter = (value: AssigneeFilterValue) => {
+    setSelectedAssigneeValues((current) => (current.includes(value) ? current.filter((item) => item !== value) : [...current, value]));
+    setPage(1);
+  };
 
-    if (nextFilters.dueBucketFilter) {
-      setDueBucketFilter(nextFilters.dueBucketFilter);
-    }
+  const toggleStatusFilter = (value: TaskStatus) => {
+    setSelectedStatusFilters((current) => (current.includes(value) ? current.filter((item) => item !== value) : [...current, value]));
+    setPage(1);
+  };
 
+  const toggleDueFilter = (value: TaskDueBucket) => {
+    setSelectedDueFilters((current) => (current.includes(value) ? current.filter((item) => item !== value) : [...current, value]));
+    setPage(1);
+  };
+
+  const toggleCompletionFilter = (value: CompletionFilter) => {
+    setSelectedCompletionFilters((current) => (current.includes(value) ? current.filter((item) => item !== value) : [...current, value]));
+    setPage(1);
+  };
+
+  const removeTaskFilter = (kind: 'assignee' | 'status' | 'due' | 'completion', value: string) => {
+    if (kind === 'assignee') setSelectedAssigneeValues((current) => current.filter((item) => item !== value));
+    if (kind === 'status') setSelectedStatusFilters((current) => current.filter((item) => item !== value));
+    if (kind === 'due') setSelectedDueFilters((current) => current.filter((item) => item !== value));
+    if (kind === 'completion') setSelectedCompletionFilters((current) => current.filter((item) => item !== value));
     setPage(1);
   };
 
@@ -1039,11 +1249,14 @@ export function TasksPage() {
     setCreateSuccess(null);
 
     const createdTaskInput = buildCreateTaskInput(form);
+    const createdAssigneeValue = createdTaskInput.assigneeId ?? UNASSIGNED_ASSIGNEE_VALUE;
+    const createdStatus = createdTaskInput.status ?? 'TODO';
+    const createdCompletion: CompletionFilter = createdStatus === 'DONE' ? 'completed' : 'open';
     const createdTaskMayBeHidden =
-      (assigneeFilter === 'me' && createdTaskInput.assigneeId !== user?.id) ||
-      (statusFilter !== 'all' && statusFilter !== (createdTaskInput.status ?? 'TODO')) ||
-      dueBucketFilter !== 'all' ||
-      completedFilter === 'completed';
+      (selectedAssigneeValues.length > 0 && !selectedAssigneeValues.includes(createdAssigneeValue)) ||
+      (selectedStatusFilters.length > 0 && !selectedStatusFilters.includes(createdStatus)) ||
+      (selectedCompletionFilters.length > 0 && !selectedCompletionFilters.includes(createdCompletion)) ||
+      selectedDueFilters.length > 0;
 
     try {
       await createTask(accessToken, createdTaskInput);
@@ -1052,7 +1265,7 @@ export function TasksPage() {
       setPage(1);
       setCreateSuccess(
         createdTaskMayBeHidden
-          ? 'Task created, but current filters may hide it. Switch to All visible or clear filters if you do not see it.'
+          ? 'Task created, but current filters may hide it. Clear filters if you do not see it.'
           : 'Task created.',
       );
       refreshTasks();
@@ -1110,41 +1323,39 @@ export function TasksPage() {
           </button>
         </div>
 
-        <section className="rounded border border-gray-200 bg-white p-4">
-          <div className="grid gap-3 sm:grid-cols-4">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Overdue</p>
-              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(myDaySummary.overdue)}</p>
-              <p className="mt-1 text-sm text-gray-600">
-                {myDaySummary.overdue > 0 ? 'Start here first.' : "You're caught up."}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Due today</p>
-              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(myDaySummary.today)}</p>
-              <p className="mt-1 text-sm text-gray-600">
-                {myDaySummary.today > 0 ? 'Due before the day ends.' : 'No tasks due today.'}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">In progress</p>
-              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(myDaySummary.inProgress)}</p>
-              <p className="mt-1 text-sm text-gray-600">Currently being worked.</p>
-            </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Waiting</p>
-              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(myDaySummary.waiting)}</p>
-              <p className="mt-1 text-sm text-gray-600">Blocked on a reply or next step.</p>
-            </div>
-            <div className="sm:col-span-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Current view</p>
-              <p className="mt-1 text-lg font-semibold text-gray-900">{formatTaskCount(totalTasks)}</p>
-              <p className="mt-1 text-sm text-gray-600">{filterSummary}.</p>
-            </div>
-          </div>
-        </section>
+        <TaskKpiSummary
+          collections={unfilteredTaskKpiCollections}
+          onOpen={openTaskKpiModal}
+        />
 
-        <TaskViewSwitcher viewMode={viewMode} onChange={handleViewModeChange} />
+        <TaskFilterBar
+          search={taskSearch}
+          onSearchChange={(value) => {
+            setTaskSearch(value);
+            setPage(1);
+          }}
+          assigneeOptions={assigneeFilterOptions}
+          selectedAssigneeValues={selectedAssigneeValues}
+          selectedStatusFilters={selectedStatusFilters}
+          selectedDueFilters={selectedDueFilters}
+          selectedCompletionFilters={selectedCompletionFilters}
+          activePreset={activeTaskPreset}
+          activeSecondaryFilterCount={activeSecondaryFilterCount}
+          moreFiltersOpen={moreTaskFiltersOpen}
+          openMenu={openTaskFilterMenu}
+          assigneeLabelsByValue={assigneeFilterLabelsByValue}
+          onMoreFiltersToggle={() => setMoreTaskFiltersOpen((current) => !current)}
+          onMenuToggle={(menu) => setOpenTaskFilterMenu((current) => (current === menu ? null : menu))}
+          onAssigneeToggle={toggleAssigneeFilter}
+          onStatusToggle={toggleStatusFilter}
+          onDueToggle={toggleDueFilter}
+          onCompletionToggle={toggleCompletionFilter}
+          onPresetSelect={applyTaskPreset}
+          onRemoveFilter={removeTaskFilter}
+          onClear={handleClearTaskFilters}
+        />
+
+        <TaskViewToolbar viewMode={viewMode} taskCount={totalTasks} onChange={handleViewModeChange} />
 
         {showCreateForm ? (
           <section className="rounded border border-gray-200 bg-white p-5">
@@ -1260,186 +1471,7 @@ export function TasksPage() {
           </section>
         ) : null}
 
-        <section className="rounded border border-gray-200 bg-white px-4 py-3">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-gray-900">Filter tasks</h2>
-              <p className="mt-1 text-sm text-gray-600">{filterSummary}.</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  applyQuickFilter({
-                    completedFilter: 'open',
-                    assigneeFilter: 'me',
-                    statusFilter: 'all',
-                    dueBucketFilter: 'all',
-                  })
-                }
-                className={QUICK_FILTER_CLASS}
-              >
-                My tasks
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  applyQuickFilter({
-                    completedFilter: 'open',
-                    statusFilter: 'all',
-                    dueBucketFilter: 'overdue',
-                  })
-                }
-                className={QUICK_FILTER_CLASS}
-              >
-                Overdue
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  applyQuickFilter({
-                    completedFilter: 'open',
-                    statusFilter: 'all',
-                    dueBucketFilter: 'today',
-                  })
-                }
-                className={QUICK_FILTER_CLASS}
-              >
-                Today
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  applyQuickFilter({
-                    completedFilter: 'open',
-                    statusFilter: 'IN_PROGRESS',
-                    dueBucketFilter: 'all',
-                  })
-                }
-                className={QUICK_FILTER_CLASS}
-              >
-                In progress
-              </button>
-            </div>
-          </div>
-          {createSuccess ? <p className="mt-3 rounded border border-green-200 bg-green-50 p-3 text-sm text-green-800">{createSuccess}</p> : null}
-          {optionWarnings.length > 0 ? (
-            <div className="mt-3 rounded border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
-              {optionWarnings.map((warning) => (
-                <p key={warning}>{warning}</p>
-              ))}
-            </div>
-          ) : null}
-          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,220px)_minmax(0,170px)_minmax(0,170px)_minmax(0,170px)_minmax(0,170px)_auto] xl:items-end">
-            <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-              Lead search
-              <input
-                value={taskSearch}
-                onChange={(event) => {
-                  setTaskSearch(event.target.value);
-                  setPage(1);
-                }}
-                placeholder="Search title, lead, email, or phone"
-                className="rounded border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-              Completion
-              <select
-                value={completedFilter}
-                onChange={(event) => {
-                  const nextCompletedFilter = event.target.value as CompletedFilter;
-                  setCompletedFilter(nextCompletedFilter);
-                  if (nextCompletedFilter !== 'open' && viewMode === 'kanban') {
-                    handleViewModeChange('table');
-                  }
-                  setPage(1);
-                }}
-                className="rounded border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
-              >
-                <option value="open">Open</option>
-                <option value="completed">Completed</option>
-                <option value="all">All</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-              Owner / Assignee
-              <select
-                value={assigneeFilter}
-                onChange={(event) => {
-                  setAssigneeFilter(event.target.value as AssigneeFilter);
-                  setPage(1);
-                }}
-                className="rounded border border-gray-300 px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
-              >
-                <option value="me">My tasks</option>
-                <option value="all">All visible tasks</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-              Status
-              <select
-                value={statusFilter}
-                onChange={(event) => {
-                  const nextStatusFilter = event.target.value as StatusFilter;
-                  setStatusFilter(nextStatusFilter);
-                  if (nextStatusFilter === 'DONE' && viewMode === 'kanban') {
-                    handleViewModeChange('table');
-                    setCompletedFilter('completed');
-                  }
-                  setPage(1);
-                }}
-                className="rounded border border-gray-300 px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
-              >
-                <option value="all">All statuses</option>
-                <option value="TODO">To do</option>
-                <option value="IN_PROGRESS">In progress</option>
-                <option value="WAITING">Waiting</option>
-                <option value="DONE">Done</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-              Due
-              <select
-                value={dueBucketFilter}
-                onChange={(event) => {
-                  setDueBucketFilter(event.target.value as DueBucketFilter);
-                  setPage(1);
-                }}
-                className="rounded border border-gray-300 px-3 py-2 text-sm font-normal text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
-              >
-                <option value="all">All</option>
-                <option value="overdue">Overdue</option>
-                <option value="today">Today</option>
-                <option value="upcoming">Upcoming</option>
-                <option value="no_due_date">No due date</option>
-              </select>
-            </label>
-            <div className="flex">
-              <button
-                type="button"
-                onClick={handleResetFilters}
-                className="rounded border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
-              >
-                Reset filters
-              </button>
-            </div>
-          </div>
-          {hasActiveFilters(completedFilter, assigneeFilter, entityTypeFilter, statusFilter, dueBucketFilter) || taskSearch.trim() ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Active filters</span>
-              {taskSearch.trim() ? <FilterChip label={`Search: ${taskSearch.trim()}`} onRemove={() => setTaskSearch('')} /> : null}
-              {assigneeFilter !== DEFAULT_ASSIGNEE_FILTER ? (
-                <FilterChip label={assigneeFilter === 'all' ? 'Team tasks' : 'My tasks'} onRemove={() => setAssigneeFilter(DEFAULT_ASSIGNEE_FILTER)} />
-              ) : null}
-              {completedFilter !== DEFAULT_COMPLETED_FILTER ? (
-                <FilterChip label={completedFilter === 'completed' ? 'Completed' : completedFilter === 'all' ? 'Open and completed' : 'Open'} onRemove={() => setCompletedFilter(DEFAULT_COMPLETED_FILTER)} />
-              ) : null}
-              {statusFilter !== DEFAULT_STATUS_FILTER ? <FilterChip label={STATUS_LABELS[statusFilter as TaskStatus]} onRemove={() => setStatusFilter(DEFAULT_STATUS_FILTER)} /> : null}
-              {dueBucketFilter !== DEFAULT_DUE_BUCKET_FILTER ? <FilterChip label={SECTION_LABELS[dueBucketFilter as TaskDueBucket]} onRemove={() => setDueBucketFilter(DEFAULT_DUE_BUCKET_FILTER)} /> : null}
-            </div>
-          ) : null}
-        </section>
+        {createSuccess ? <p className="rounded border border-green-200 bg-green-50 p-3 text-sm text-green-800">{createSuccess}</p> : null}
 
         {tasksLoading ? <p className="rounded border border-gray-200 bg-white p-5 text-sm text-gray-700">Loading tasks...</p> : null}
 
@@ -1459,14 +1491,8 @@ export function TasksPage() {
 
         {!tasksLoading && !tasksError && visibleTasks.length === 0 && viewMode !== 'kanban' && viewMode !== 'calendar' ? (
           <EmptyTasksState
-            assigneeFilter={assigneeFilter}
-            entityTypeFilter={entityTypeFilter}
-            dueBucketFilter={dueBucketFilter}
-            hasFilters={hasActiveFilters(completedFilter, assigneeFilter, entityTypeFilter, statusFilter, dueBucketFilter)}
-            onShowAll={() => {
-              setAssigneeFilter('all');
-              setPage(1);
-            }}
+            hasFilters={hasActiveTaskFilters || Boolean(taskSearch.trim())}
+            onClear={handleClearTaskFilters}
             onCreate={() => setShowCreateForm(true)}
           />
         ) : null}
@@ -1592,8 +1618,224 @@ export function TasksPage() {
             }}
           />
         ) : null}
+        {openTaskKpi ? (
+          <TaskKpiModal
+            kpi={openTaskKpi}
+            tasks={unfilteredTaskKpiCollections[openTaskKpi]}
+            contactsById={contactsById}
+            dealsById={dealsById}
+            leadsById={leadsById}
+            membershipsByUserId={membershipsByUserId}
+            onClose={closeTaskKpiModal}
+          />
+        ) : null}
       </div>
     </AppShell>
+  );
+}
+
+type TaskKpiSummaryProps = {
+  collections: Record<TaskKpiId, Task[]>;
+  onOpen: (kpi: TaskKpiId, opener: HTMLButtonElement) => void;
+};
+
+function TaskKpiSummary({ collections, onOpen }: TaskKpiSummaryProps) {
+  const items: TaskKpiId[] = ['overdue', 'today', 'inProgress', 'waiting'];
+
+  return (
+    <section aria-label="Task KPI summary">
+      <div className="grid items-stretch gap-3 min-[520px]:grid-cols-2 xl:grid-cols-4">
+        {items.map((id) => {
+          const count = collections[id].length;
+          const copy = TASK_KPI_COPY[id];
+          const tone = getTaskKpiTone(id, count);
+
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={(event) => onOpen(id, event.currentTarget)}
+              aria-label={`${copy.title}: ${formatTaskCount(count)}. Open ${copy.modalTitle.toLowerCase()}.`}
+              className={getTaskKpiClassName(tone)}
+            >
+              <span className="flex items-start justify-between gap-3">
+                <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">{copy.title}</span>
+                <span className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${getTaskKpiAccentClassName(tone)}`} aria-hidden="true" />
+              </span>
+              <span className="mt-1.5 block text-2xl font-semibold leading-none text-gray-950">{formatNumber(count)}</span>
+              <span className="mt-1.5 block text-xs leading-4 text-gray-600">{getTaskKpiHelper(id, count)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+type TaskKpiModalProps = {
+  kpi: TaskKpiId;
+  tasks: Task[];
+  contactsById: Map<string, Contact>;
+  dealsById: Map<string, Deal>;
+  leadsById: Map<string, Lead>;
+  membershipsByUserId: Map<string, MembershipOption>;
+  onClose: () => void;
+};
+
+function TaskKpiModal({
+  kpi,
+  tasks,
+  contactsById,
+  dealsById,
+  leadsById,
+  membershipsByUserId,
+  onClose,
+}: TaskKpiModalProps) {
+  const copy = TASK_KPI_COPY[kpi];
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const titleId = `task-kpi-modal-${kpi}-title`;
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeButtonRef.current?.focus();
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  const handleBackdropMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) {
+      onClose();
+    }
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (event.key !== 'Tab' || !dialogRef.current) return;
+
+    const focusableElements = getFocusableElements(dialogRef.current);
+    if (focusableElements.length === 0) return;
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault();
+      lastElement.focus();
+    } else if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus();
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/40 px-3 py-4 sm:px-6"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      onMouseDown={handleBackdropMouseDown}
+      onKeyDown={handleKeyDown}
+    >
+      <div
+        ref={dialogRef}
+        className="flex max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="shrink-0 border-b border-gray-200 px-4 py-3 sm:px-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 id={titleId} className="text-lg font-semibold text-gray-950">{copy.modalTitle}</h2>
+              <p className="mt-1 text-sm text-gray-700">{getTaskKpiSubtitle(kpi, tasks.length)}</p>
+            </div>
+            <button
+              ref={closeButtonRef}
+              type="button"
+              onClick={onClose}
+              className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        <div className={['min-h-0 p-4 sm:px-5', tasks.length > 6 ? 'overflow-y-auto' : ''].join(' ')}>
+          {tasks.length === 0 ? (
+            <p className="rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{copy.empty}</p>
+          ) : (
+            <div className="space-y-2">
+              {tasks.map((task) => (
+                <TaskKpiModalRow
+                  key={task.id}
+                  task={task}
+                  contactsById={contactsById}
+                  dealsById={dealsById}
+                  leadsById={leadsById}
+                  membershipsByUserId={membershipsByUserId}
+                  onClose={onClose}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type TaskKpiModalRowProps = {
+  task: Task;
+  contactsById: Map<string, Contact>;
+  dealsById: Map<string, Deal>;
+  leadsById: Map<string, Lead>;
+  membershipsByUserId: Map<string, MembershipOption>;
+  onClose: () => void;
+};
+
+function TaskKpiModalRow({ task, contactsById, dealsById, leadsById, membershipsByUserId, onClose }: TaskKpiModalRowProps) {
+  const entityLabel = getTaskEntityLabel(task, contactsById, dealsById, leadsById);
+  const entityPath = getTaskEntityPath(task);
+  const assigneeLabel = getTaskAssigneeLabel(task, membershipsByUserId);
+  const dueStatus = getDueStatus(task);
+  const priorityLabel = task.taskType === 'FOLLOW_UP' ? 'Follow-up' : null;
+
+  return (
+    <Link
+      to={entityPath}
+      onClick={onClose}
+      className="group block rounded border border-gray-200 bg-white px-3 py-2.5 transition hover:border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+      aria-label={`${task.title}. Open related ${ENTITY_LABELS[task.entityType].toLowerCase()} ${entityLabel}.`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={getEntityClassName(task.entityType)}>{ENTITY_LABELS[task.entityType]}</span>
+            <span className={getDueClassName(dueStatus)}>{dueStatus.label}</span>
+            <span className={getStatusClassName(task.status)}>{STATUS_LABELS[task.status]}</span>
+            {priorityLabel ? <span className="rounded bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700">{priorityLabel}</span> : null}
+          </div>
+          <h3 className="mt-2 break-words text-sm font-semibold text-gray-950">{task.title}</h3>
+          <p className="mt-1 break-words text-sm text-gray-700">
+            {ENTITY_LABELS[task.entityType]}: <span className="font-medium text-gray-900">{entityLabel}</span>
+          </p>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
+            {task.dueAt ? <span>Due {formatDateTime(task.dueAt)}</span> : null}
+            <span>Assigned to {assigneeLabel}</span>
+          </div>
+        </div>
+        <span className="mt-1 shrink-0 text-gray-400 transition group-hover:translate-x-0.5 group-hover:text-gray-700" aria-hidden="true">
+          &rsaquo;
+        </span>
+      </div>
+    </Link>
   );
 }
 
@@ -1637,16 +1879,314 @@ function TaskViewSwitcher({ viewMode, onChange }: TaskViewSwitcherProps) {
   );
 }
 
-function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+function TaskViewToolbar({ viewMode, taskCount, onChange }: TaskViewSwitcherProps & { taskCount: number }) {
   return (
-    <button
-      type="button"
-      onClick={onRemove}
-      className="rounded-full border border-gray-300 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-white focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
-      title={`Remove ${label}`}
-    >
-      {label} x
-    </button>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <TaskViewSwitcher viewMode={viewMode} onChange={onChange} />
+      <p className="px-2 text-sm text-gray-600">{formatTaskCount(taskCount)}</p>
+    </div>
+  );
+}
+
+type TaskFilterBarProps = {
+  search: string;
+  onSearchChange: (value: string) => void;
+  assigneeOptions: Array<{ label: string; value: AssigneeFilterValue }>;
+  selectedAssigneeValues: AssigneeFilterValue[];
+  selectedStatusFilters: TaskStatus[];
+  selectedDueFilters: TaskDueBucket[];
+  selectedCompletionFilters: CompletionFilter[];
+  activePreset: TaskPresetId;
+  activeSecondaryFilterCount: number;
+  moreFiltersOpen: boolean;
+  openMenu: TaskFilterMenu | null;
+  assigneeLabelsByValue: Map<string, string>;
+  onMoreFiltersToggle: () => void;
+  onMenuToggle: (menu: TaskFilterMenu) => void;
+  onAssigneeToggle: (value: AssigneeFilterValue) => void;
+  onStatusToggle: (value: TaskStatus) => void;
+  onDueToggle: (value: TaskDueBucket) => void;
+  onCompletionToggle: (value: CompletionFilter) => void;
+  onPresetSelect: (value: TaskPresetId) => void;
+  onRemoveFilter: (kind: 'assignee' | 'status' | 'due' | 'completion', value: string) => void;
+  onClear: () => void;
+};
+
+function TaskFilterBar({
+  search,
+  onSearchChange,
+  assigneeOptions,
+  selectedAssigneeValues,
+  selectedStatusFilters,
+  selectedDueFilters,
+  selectedCompletionFilters,
+  activePreset,
+  activeSecondaryFilterCount,
+  moreFiltersOpen,
+  openMenu,
+  assigneeLabelsByValue,
+  onMoreFiltersToggle,
+  onMenuToggle,
+  onAssigneeToggle,
+  onStatusToggle,
+  onDueToggle,
+  onCompletionToggle,
+  onPresetSelect,
+  onRemoveFilter,
+  onClear,
+}: TaskFilterBarProps) {
+  const hasSelections =
+    selectedAssigneeValues.length > 0 ||
+    selectedStatusFilters.length > 0 ||
+    selectedDueFilters.length > 0 ||
+    selectedCompletionFilters.length > 0;
+
+  return (
+    <section className="overflow-visible rounded-xl border border-gray-200 bg-white shadow-sm" aria-label="Task filters">
+      <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-[minmax(280px,1fr)_minmax(220px,260px)_minmax(180px,220px)_auto] xl:items-center xl:px-6">
+        <label className="relative block">
+          <span className="sr-only">Search tasks</span>
+          <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-500" aria-hidden="true" />
+          <input
+            value={search}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder="Search title, related lead, contact, email or phone..."
+            className="h-12 w-full rounded-lg border border-gray-300 bg-white pl-12 pr-4 text-sm font-medium text-gray-900 shadow-sm placeholder:text-gray-500 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-100"
+          />
+        </label>
+
+        <TaskFilterDropdown
+          id="task-assignee-filter"
+          title="Assignee"
+          valueLabel={selectedCountLabel(selectedAssigneeValues.length)}
+          open={openMenu === 'assignee'}
+          onToggle={() => onMenuToggle('assignee')}
+        >
+          {assigneeOptions.map((option) => (
+            <TaskFilterCheckbox
+              key={option.value}
+              label={option.label}
+              checked={selectedAssigneeValues.includes(option.value)}
+              onChange={() => onAssigneeToggle(option.value)}
+            />
+          ))}
+        </TaskFilterDropdown>
+
+        <button
+          type="button"
+          onClick={onMoreFiltersToggle}
+          className="flex h-12 w-full items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-100"
+          aria-expanded={moreFiltersOpen}
+          aria-controls="task-secondary-filters"
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <ListFilter className="h-5 w-5 shrink-0 text-gray-600" aria-hidden="true" />
+            <span className="truncate">More filters</span>
+            {activeSecondaryFilterCount > 0 ? <span className="text-gray-500">&middot; {activeSecondaryFilterCount}</span> : null}
+          </span>
+          <ChevronDown className={`h-5 w-5 shrink-0 text-gray-600 transition-transform ${moreFiltersOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onClear}
+          className="flex h-12 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-100"
+        >
+          <RotateCcw className="h-4 w-4 text-gray-600" aria-hidden="true" />
+          Clear all
+        </button>
+      </div>
+
+      {moreFiltersOpen ? (
+        <div id="task-secondary-filters" className="border-t border-gray-200 p-4 sm:px-6">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <TaskFilterDropdown
+              id="task-status-filter"
+              title="Status"
+              valueLabel={selectedCountLabel(selectedStatusFilters.length)}
+              open={openMenu === 'status'}
+              onToggle={() => onMenuToggle('status')}
+            >
+              {TASK_STATUS_OPTIONS.map((option) => (
+                <TaskFilterCheckbox
+                  key={option.value}
+                  label={option.label}
+                  checked={selectedStatusFilters.includes(option.value)}
+                  onChange={() => onStatusToggle(option.value)}
+                />
+              ))}
+            </TaskFilterDropdown>
+
+            <TaskFilterDropdown
+              id="task-due-filter"
+              title="Due"
+              valueLabel={selectedCountLabel(selectedDueFilters.length)}
+              open={openMenu === 'due'}
+              onToggle={() => onMenuToggle('due')}
+            >
+              {TASK_DUE_OPTIONS.map((option) => (
+                <TaskFilterCheckbox
+                  key={option.value}
+                  label={option.label}
+                  checked={selectedDueFilters.includes(option.value)}
+                  onChange={() => onDueToggle(option.value)}
+                />
+              ))}
+            </TaskFilterDropdown>
+
+            <TaskFilterDropdown
+              id="task-completion-filter"
+              title="Completion"
+              valueLabel={selectedCountLabel(selectedCompletionFilters.length)}
+              open={openMenu === 'completion'}
+              onToggle={() => onMenuToggle('completion')}
+            >
+              {TASK_COMPLETION_OPTIONS.map((option) => (
+                <TaskFilterCheckbox
+                  key={option.value}
+                  label={option.label}
+                  checked={selectedCompletionFilters.includes(option.value)}
+                  onChange={() => onCompletionToggle(option.value)}
+                />
+              ))}
+            </TaskFilterDropdown>
+
+            <TaskFilterDropdown
+              id="task-preset-filter"
+              title="Preset"
+              valueLabel={getTaskPresetLabel(activePreset)}
+              open={openMenu === 'preset'}
+              onToggle={() => onMenuToggle('preset')}
+            >
+              {TASK_PRESET_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => onPresetSelect(option.value)}
+                  disabled={option.value === 'CUSTOM'}
+                  className={[
+                    'flex w-full items-center justify-between rounded px-3 py-2 text-left text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-1 disabled:cursor-default disabled:opacity-70',
+                    activePreset === option.value ? 'bg-gray-900 text-white' : 'text-gray-800 hover:bg-gray-50',
+                  ].join(' ')}
+                >
+                  {option.label}
+                  {activePreset === option.value ? <span aria-hidden="true">&check;</span> : null}
+                </button>
+              ))}
+            </TaskFilterDropdown>
+          </div>
+        </div>
+      ) : null}
+
+      {hasSelections ? (
+        <div className="border-t border-gray-200 px-4 py-4 sm:px-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+            <p className="shrink-0 text-sm font-semibold text-gray-900">Selected filters</p>
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedAssigneeValues.map((value) => (
+                <TaskSelectedFilterChip key={value} label={assigneeLabelsByValue.get(value) ?? 'Selected assignee'} onRemove={() => onRemoveFilter('assignee', value)} />
+              ))}
+              {selectedStatusFilters.map((value) => (
+                <TaskSelectedFilterChip key={value} label={STATUS_LABELS[value]} onRemove={() => onRemoveFilter('status', value)} />
+              ))}
+              {selectedDueFilters.map((value) => (
+                <TaskSelectedFilterChip key={value} label={getDueLabel(value)} tone={value === 'overdue' ? 'danger' : value === 'today' ? 'warm' : 'neutral'} onRemove={() => onRemoveFilter('due', value)} />
+              ))}
+              {selectedCompletionFilters.map((value) => (
+                <TaskSelectedFilterChip key={value} label={getCompletionLabel(value)} onRemove={() => onRemoveFilter('completion', value)} />
+              ))}
+              <button
+                type="button"
+                onClick={onClear}
+                className="h-9 rounded-lg px-3 text-sm font-semibold text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-1"
+              >
+                Clear all
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function TaskFilterDropdown({
+  id,
+  title,
+  valueLabel,
+  open,
+  onToggle,
+  children,
+}: {
+  id: string;
+  title: string;
+  valueLabel: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="relative" onKeyDown={(event) => {
+      if (event.key === 'Escape' && open) {
+        event.preventDefault();
+        onToggle();
+      }
+    }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex h-12 w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-100"
+        aria-expanded={open}
+        aria-controls={`${id}-menu`}
+        aria-haspopup="menu"
+      >
+        <span className="min-w-0 truncate">
+          {title} <span className="text-gray-500">&middot;</span> <span className="text-gray-700">{valueLabel}</span>
+        </span>
+        <ChevronDown className={`h-5 w-5 shrink-0 text-gray-600 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div id={`${id}-menu`} className="absolute left-0 top-full z-30 mt-2 max-h-72 w-full min-w-56 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2 shadow-lg" role="menu">
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TaskFilterCheckbox({ label, checked, onChange }: { label: string; checked: boolean; onChange: () => void }) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500"
+      />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+function selectedPillClass(tone: 'neutral' | 'danger' | 'warm' = 'neutral') {
+  if (tone === 'danger') return 'bg-red-50 text-red-700';
+  if (tone === 'warm') return 'bg-amber-50 text-amber-800';
+  return 'bg-gray-100 text-gray-800';
+}
+
+function TaskSelectedFilterChip({ label, tone = 'neutral', onRemove }: { label: string; tone?: 'neutral' | 'danger' | 'warm'; onRemove: () => void }) {
+  return (
+    <span className={`inline-flex h-9 items-center gap-2 rounded-full px-3 text-sm font-semibold ${selectedPillClass(tone)}`}>
+      {label}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="rounded-full p-0.5 text-current hover:bg-white/70 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-1"
+        aria-label={`Remove ${label} filter`}
+      >
+        x
+      </button>
+    </span>
   );
 }
 
@@ -1962,57 +2502,31 @@ function TaskMeta({ label, value }: TaskMetaProps) {
 }
 
 type EmptyTasksStateProps = {
-  assigneeFilter: AssigneeFilter;
-  entityTypeFilter: EntityTypeFilter;
-  dueBucketFilter: DueBucketFilter;
   hasFilters: boolean;
-  onShowAll: () => void;
+  onClear: () => void;
   onCreate: () => void;
 };
 
 function EmptyTasksState({
-  assigneeFilter,
-  entityTypeFilter,
-  dueBucketFilter,
   hasFilters,
-  onShowAll,
+  onClear,
   onCreate,
 }: EmptyTasksStateProps) {
-  const title =
-    assigneeFilter === 'me'
-      ? 'No tasks assigned to you'
-      : entityTypeFilter === 'LEAD'
-        ? 'No lead follow-up tasks yet'
-        : dueBucketFilter === 'today'
-          ? 'No tasks due today'
-          : dueBucketFilter === 'overdue'
-            ? 'No overdue tasks'
-            : 'No tasks found';
-  const message =
-    assigneeFilter === 'me'
-      ? 'Switch to All visible tasks to see team tasks.'
-      : entityTypeFilter === 'LEAD'
-        ? "Create one from a lead's detail page or here."
-        : dueBucketFilter === 'today'
-          ? 'No tasks due today.'
-          : dueBucketFilter === 'overdue'
-            ? "No overdue tasks - you're caught up."
-          : hasFilters
-            ? 'Try changing or resetting the filters.'
-            : 'Create the first task to start tracking follow-up work.';
+  const title = hasFilters ? 'No tasks match these filters' : 'No tasks found';
+  const message = hasFilters ? 'Try changing or clearing your filters.' : 'Create the first task to start tracking follow-up work.';
 
   return (
     <div className="rounded border border-gray-200 bg-white p-8 text-center">
       <h2 className="text-base font-semibold text-gray-900">{title}</h2>
       <p className="mt-2 text-sm text-gray-600">{message}</p>
       <div className="mt-4 flex flex-wrap justify-center gap-3">
-        {assigneeFilter === 'me' ? (
+        {hasFilters ? (
           <button
             type="button"
-            onClick={onShowAll}
+            onClick={onClear}
             className="rounded border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
           >
-            Show all visible
+            Clear filters
           </button>
         ) : null}
         <button
