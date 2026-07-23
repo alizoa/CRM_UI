@@ -12,6 +12,7 @@ type Props = {
   onEdit: () => void;
   onMarkLost: () => void;
   onReopen: () => void;
+  lastUpdatedByLine?: string;
 };
 
 const STAGE_STYLES: Record<LeadStage, string> = {
@@ -92,7 +93,7 @@ const ICONS = {
   calendar: 'M7 3v4M17 3v4M4 8h16M5 5h14v15H5V5Z',
 };
 
-export function LeadOverviewCard({ lead, busy, editing, onConvert, onDelete, onMarkContacted, onMarkQualified, onEdit, onMarkLost, onReopen }: Props) {
+export function LeadOverviewCard({ lead, busy, editing, onConvert, onDelete, onMarkContacted, onMarkQualified, onEdit, onMarkLost, onReopen, lastUpdatedByLine }: Props) {
   const name = [lead.firstName, lead.lastName].filter(Boolean).join(' ') || 'Unnamed lead';
   const active = lead.stage !== 'WON' && lead.stage !== 'LOST';
   const canConvert = active && Boolean(lead.firstName?.trim());
@@ -112,6 +113,7 @@ export function LeadOverviewCard({ lead, busy, editing, onConvert, onDelete, onM
             </p>
           ) : null}
           {active && !canConvert ? <p className="mt-2 text-sm text-amber-700">Add a first name before marking this lead won.</p> : null}
+          {lastUpdatedByLine ? <p className="mt-2 text-sm text-gray-600">{lastUpdatedByLine}</p> : null}
         </div>
         <div className="flex flex-wrap gap-2 lg:justify-end">
           {active ? <button type="button" disabled={busy || !canConvert} onClick={onConvert} className="rounded bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-gray-300">Mark Won</button> : null}

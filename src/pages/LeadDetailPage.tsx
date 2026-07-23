@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { LeadOverviewCard } from '../components/leads/LeadOverviewCard';
+import { ActivityCommentTimeline } from '../components/leads/ActivityCommentTimeline';
 import { LeadSourceContextCard } from '../components/leads/LeadSourceContextCard';
 import { AppShell } from '../components/layout/AppShell';
 import { EntityNotesPanel } from '../components/notes/EntityNotesPanel';
 import { EntityTasksPanel } from '../components/tasks/EntityTasksPanel';
 import { TaskDetailModal } from '../components/tasks/TaskDetailModal';
 import { useAuth } from '../context/AuthContext';
+import { listActivities, subscribeToActivityChanges, type Activity } from '../lib/activities';
 import type { HttpError } from '../lib/http';
 import { listLeadSourceOptions, type LeadSourceOption } from '../lib/lead-sources';
 import {
@@ -22,6 +24,7 @@ import {
   type UpdateLeadInput,
 } from '../lib/leads';
 import { listMembershipOptions, type MembershipOption } from '../lib/memberships';
+import { formatRelativeTime } from '../lib/relative-time';
 import { completeTask, isOpenFollowUpTask, listTasks, type Task, type TaskStatus } from '../lib/tasks';
 
 type RequestError = { status: number; message: string };
@@ -61,14 +64,6 @@ const MAIN_STAGES: Array<{ id: LeadStage; label: string }> = [
   { id: 'WON', label: 'Converted' },
   { id: 'LOST', label: 'Lost' },
 ];
-
-const STAGE_LABELS: Record<LeadStage, string> = {
-  NEW: 'New',
-  CONTACTED: 'Contacted',
-  QUALIFIED: 'Qualified',
-  WON: 'Won',
-  LOST: 'Lost',
-};
 
 const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   TODO: 'To do',
@@ -117,6 +112,11 @@ function leadName(lead: Lead) {
   return [lead.firstName, lead.lastName].filter(Boolean).join(' ') || lead.email || lead.phone || 'Unnamed lead';
 }
 
+function leadOwnerName(lead: Lead) {
+  if (!lead.owner) return 'System';
+  return [lead.owner.firstName, lead.owner.lastName].filter(Boolean).join(' ') || lead.owner.email;
+}
+
 function formatDate(value: string | null | undefined) {
   if (!value) return '-';
   const date = new Date(value);
@@ -157,10 +157,6 @@ function isOverdue(value: string | null | undefined) {
   if (!value) return false;
   const date = new Date(value);
   return !Number.isNaN(date.getTime()) && date.getTime() < Date.now();
-}
-
-function sourceLabel(value: string) {
-  return value.charAt(0) + value.slice(1).toLowerCase().replace(/_/g, ' ');
 }
 
 function currentMainStage(lead: Lead): LeadStage {
@@ -280,8 +276,6 @@ const ICONS = {
   user: 'M20 21a8 8 0 0 0-16 0M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z',
   flag: 'M5 21V5m0 0h12l-2 5 2 5H5',
   plus: 'M12 5v14M5 12h14',
-  note: 'M7 4h10l3 3v13H7V4Zm10 0v4h4M10 12h7M10 16h7',
-  person: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21a8 8 0 0 1 16 0',
 };
 
 export function LeadDetailPage() {
@@ -291,9 +285,12 @@ export function LeadDetailPage() {
   const [lead, setLead] = useState<Lead | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [leadTasks, setLeadTasks] = useState<Task[]>([]);
+  const [leadActivities, setLeadActivities] = useState<Activity[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(false);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [activitiesLoading, setActivitiesLoading] = useState(false);
+  const [activitiesError, setActivitiesError] = useState<RequestError | null>(null);
   const [error, setError] = useState<RequestError | null>(null);
   const [editing, setEditing] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
@@ -337,6 +334,27 @@ export function LeadDetailPage() {
     }
   }, [accessToken, id]);
 
+  const fetchLeadActivities = useCallback(async () => {
+    if (!accessToken || !id) {
+      setLeadActivities([]);
+      setActivitiesError(null);
+      return;
+    }
+
+    setActivitiesLoading(true);
+    setActivitiesError(null);
+
+    try {
+      const response = await listActivities(accessToken, { entityType: 'LEAD', entityId: id, page: 1, limit: 100 });
+      setLeadActivities(response.data);
+    } catch (requestFailure) {
+      setLeadActivities([]);
+      setActivitiesError(requestError(requestFailure, 'Could not load lead activity.'));
+    } finally {
+      setActivitiesLoading(false);
+    }
+  }, [accessToken, id]);
+
   const refreshLeadTasks = useCallback(() => {
     void fetchLeadTasks();
     void fetchLead();
@@ -344,6 +362,11 @@ export function LeadDetailPage() {
 
   useEffect(() => { void fetchLead(); }, [fetchLead]);
   useEffect(() => { void fetchLeadTasks(); }, [fetchLeadTasks]);
+  useEffect(() => { void fetchLeadActivities(); }, [fetchLeadActivities]);
+
+  useEffect(() => subscribeToActivityChanges(() => {
+    void fetchLeadActivities();
+  }), [fetchLeadActivities]);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -357,6 +380,12 @@ export function LeadDetailPage() {
   }, [accessToken]);
 
   const nextActionTask = useMemo(() => getNextActionTask(leadTasks), [leadTasks]);
+  const latestLeadActivity = leadActivities[0] ?? null;
+  const lastUpdatedByLine = latestLeadActivity
+    ? `Last updated by ${latestLeadActivity.actorDisplayName || 'System'} · ${formatRelativeTime(latestLeadActivity.createdAt) || formatDateTime(latestLeadActivity.createdAt)}`
+    : lead
+      ? `Last updated by ${leadOwnerName(lead)} · ${formatRelativeTime(lead.updatedAt) || formatDateTime(lead.updatedAt)}`
+      : undefined;
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -510,6 +539,7 @@ export function LeadDetailPage() {
               onMarkQualified={() => void updateStatus('QUALIFIED')}
               onMarkLost={() => void lifecycle('lost')}
               onReopen={() => void lifecycle('reopen')}
+              lastUpdatedByLine={lastUpdatedByLine}
             />
             {success ? <p className="rounded border border-green-200 bg-green-50 p-3 text-sm text-green-800">{success}</p> : null}
             {actionError ? <p className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{actionError.message}</p> : null}
@@ -540,11 +570,19 @@ export function LeadDetailPage() {
               <EntityNotesPanel
                 entityType="LEAD"
                 entityId={lead.id}
-                title="Lead notes"
+                title="General notes"
+                description="Keep important background information about this lead."
               />
             </div>
 
-            <RecentLeadTimeline lead={lead} tasks={leadTasks} onRefresh={refreshLeadTasks} />
+            <ActivityCommentTimeline
+              leadId={lead.id}
+              activities={leadActivities}
+              loading={activitiesLoading}
+              error={activitiesError?.message ?? null}
+              tasks={leadTasks}
+              onRefresh={fetchLeadActivities}
+            />
 
             {selectedTask ? (
               <TaskDetailModal
@@ -845,59 +883,6 @@ function NextActionCard({
       ) : null}
     </section>
   );
-}
-
-function RecentLeadTimeline({ lead, tasks, onRefresh }: { lead: Lead; tasks: Task[]; onRefresh: () => void }) {
-  const source = lead.leadSource?.name ?? sourceLabel(lead.source);
-  const nextTask = getNextActionTask(tasks);
-  const events = [
-    { id: 'created', title: 'Lead created', context: `From ${source}`, actor: source, date: lead.createdAt, icon: ICONS.plus, tone: 'green' },
-    { id: 'contacted', title: 'Contacted the lead', context: lead.status === 'NEW' ? 'Awaiting first contact' : 'By Demo User', actor: 'Demo User', date: lead.updatedAt, icon: ICONS.phone, tone: 'green' },
-    { id: 'completed', title: 'Follow-up completed', context: 'Discussed needs', actor: 'Demo User', date: '2024-06-17T11:40:00.000Z', icon: ICONS.calendar, tone: 'blue' },
-    { id: 'note', title: 'Note added', context: 'Interested in pricing', actor: 'Demo User', date: '2024-06-18T14:15:00.000Z', icon: ICONS.note, tone: 'purple' },
-    { id: 'scheduled', title: 'Follow-up scheduled', context: nextTask ? `Follow-up #${followUpSequence(lead, tasks, nextTask)}` : 'No active follow-up', actor: 'Demo User', date: nextTask?.updatedAt ?? lead.updatedAt, icon: ICONS.calendar, tone: 'amber' },
-    { id: 'stage', title: 'Stage updated', context: `Moved to ${STAGE_LABELS[lead.stage]}`, actor: 'Demo User', date: lead.updatedAt, icon: ICONS.person, tone: 'green' },
-  ];
-
-  return (
-    <section className="rounded-lg border border-gray-200 bg-white p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-gray-900">Recent lead activity</h2>
-          <p className="mt-1 text-sm text-gray-600">{events.length} related activities</p>
-        </div>
-        <button type="button" onClick={onRefresh} className="rounded border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
-          Refresh
-        </button>
-      </div>
-      <ol className="mt-6 grid gap-5 md:grid-cols-3 xl:grid-cols-6">
-        {events.map((event, index) => (
-          <li key={event.id} className="relative flex gap-3 md:block">
-            {index < events.length - 1 ? <span className="absolute left-5 top-10 h-[calc(100%-1rem)] w-px bg-gray-200 md:left-1/2 md:top-5 md:h-px md:w-full" aria-hidden="true" /> : null}
-            <span className={`relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border bg-white ${timelineTone(event.tone)}`}>
-              <Icon path={event.icon} />
-            </span>
-            <div className="min-w-0 md:mt-3">
-              <p className="text-sm font-semibold text-gray-900">{event.title}</p>
-              <p className="mt-1 text-xs text-gray-600">{event.context}</p>
-              <p className="mt-1 text-xs text-gray-500">{event.actor}</p>
-              <time className="mt-2 block text-xs text-gray-600" dateTime={event.date}>{formatDateTime(event.date)}</time>
-            </div>
-          </li>
-        ))}
-      </ol>
-      <button type="button" className="mx-auto mt-6 block text-sm font-semibold text-gray-800 underline decoration-gray-300 underline-offset-4 hover:text-gray-950">
-        View all activity
-      </button>
-    </section>
-  );
-}
-
-function timelineTone(tone: string) {
-  if (tone === 'blue') return 'border-blue-200 text-blue-700';
-  if (tone === 'purple') return 'border-purple-200 text-purple-700';
-  if (tone === 'amber') return 'border-amber-200 text-amber-700';
-  return 'border-emerald-200 text-emerald-700';
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

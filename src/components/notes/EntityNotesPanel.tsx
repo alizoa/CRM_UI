@@ -8,6 +8,7 @@ type EntityNotesPanelProps = {
   entityType: EntityType;
   entityId: string;
   title?: string;
+  description?: string;
   onNotesChanged?: () => void;
 };
 
@@ -76,7 +77,7 @@ function buildCreateNoteInput(entityType: EntityType, entityId: string, body: st
   };
 }
 
-export function EntityNotesPanel({ entityType, entityId, title = 'Related notes', onNotesChanged }: EntityNotesPanelProps) {
+export function EntityNotesPanel({ entityType, entityId, title = 'Related notes', description, onNotesChanged }: EntityNotesPanelProps) {
   const { accessToken } = useAuth();
   const [notesData, setNotesData] = useState<NotesResponse | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -227,7 +228,8 @@ export function EntityNotesPanel({ entityType, entityId, title = 'Related notes'
     <section className="rounded border border-gray-200 bg-white p-5">
       <div>
         <h2 className="text-base font-semibold text-gray-900">{title}</h2>
-        <p className="mt-1 text-sm text-gray-600">{totalNotes === 1 ? '1 related note' : `${totalNotes} related notes`}</p>
+        <p className="mt-1 text-sm text-gray-600">{description ?? (totalNotes === 1 ? '1 related note' : `${totalNotes} related notes`)}</p>
+        {description ? <p className="mt-1 text-xs text-gray-500">{totalNotes === 1 ? '1 related note' : `${totalNotes} related notes`}</p> : null}
       </div>
 
       {successMessage ? <p className="mt-4 rounded border border-green-200 bg-green-50 p-3 text-sm text-green-800">{successMessage}</p> : null}
