@@ -18,6 +18,7 @@ import {
 } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
+import { useTaskChangeDocumentation } from '../components/tasks/useTaskChangeDocumentation';
 import { useAuth } from '../context/AuthContext';
 import type { HttpError } from '../lib/http';
 import { listLeads, type Lead } from '../lib/leads';
@@ -25,6 +26,8 @@ import { listMembershipOptions, type MembershipOption } from '../lib/memberships
 import {
   completeTask,
   listTasks,
+  previewTaskComplete,
+  previewTaskUpdate,
   subscribeToTaskChanges,
   updateTask,
   type Task,
@@ -232,6 +235,7 @@ export function WorklistPage() {
     upcoming: null,
     completed: null,
   });
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: (error) => toRequestError(error, 'Could not update task.').message });
   const today = useMemo(() => new Date(), [refreshKey, tasks]);
   const todayStart = useMemo(() => getLocalDayStart(today), [today]);
   const tomorrowStart = useMemo(() => addLocalDays(todayStart, 1), [todayStart]);
@@ -434,18 +438,25 @@ export function WorklistPage() {
     setExpandedDateGroups((current) => ({ ...current, [groupKey]: !current[groupKey] }));
   }
 
-  async function handleComplete(item: LeadAgendaTask) {
+  function handleComplete(item: LeadAgendaTask) {
     if (!accessToken) {
       setError({ status: 401, message: 'You need to sign in before updating tasks.' });
       return;
     }
 
-    try {
-      await completeTask(accessToken, item.task.id);
-      loadTodayData();
-    } catch (requestError) {
-      setError(toRequestError(requestError, 'Could not complete task.'));
-    }
+    runTaskChange({
+      task: item.task,
+      preview: previewTaskComplete(item.task),
+      source: 'worklist',
+      title: 'Complete task?',
+      description: 'Review this Task status change before saving.',
+      confirmLabel: 'Complete task',
+      run: async (context) => {
+        await completeTask(accessToken, item.task.id, context);
+        loadTodayData();
+      },
+      onError: (requestError) => setError(toRequestError(requestError, 'Could not complete task.')),
+    });
   }
 
   return (
@@ -665,6 +676,7 @@ export function WorklistPage() {
           }}
         />
       ) : null}
+      {documentationDialog}
     </AppShell>
   );
 }
@@ -873,6 +885,7 @@ function RescheduleModal({
   const [timeValue, setTimeValue] = useState(() => toLocalTimeInput(state.item.task.dueAt));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<RequestError | null>(null);
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: (requestError) => toRequestError(requestError, 'Could not reschedule task.').message });
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
@@ -908,7 +921,7 @@ function RescheduleModal({
     }
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!accessToken) {
@@ -922,17 +935,29 @@ function RescheduleModal({
       return;
     }
 
-    setSaving(true);
-    setError(null);
-
-    try {
-      await updateTask(accessToken, state.item.task.id, { dueAt: nextDueAt });
-      onSaved();
-    } catch (requestError) {
-      setError(toRequestError(requestError, 'Could not reschedule task.'));
-    } finally {
-      setSaving(false);
-    }
+    const input = { dueAt: nextDueAt };
+    runTaskChange({
+      task: state.item.task,
+      preview: previewTaskUpdate(state.item.task, input),
+      source: 'worklist',
+      title: 'Confirm task due date change',
+      description: 'Review this Task due date change before saving.',
+      run: async (context) => {
+        setSaving(true);
+        setError(null);
+        try {
+          await updateTask(accessToken, state.item.task.id, input, context);
+          onSaved();
+        } finally {
+          setSaving(false);
+        }
+      },
+      onCancel: () => {
+        setDateValue(toLocalDateInput(state.item.task.dueAt));
+        setTimeValue(toLocalTimeInput(state.item.task.dueAt));
+      },
+      onError: (requestError) => setError(toRequestError(requestError, 'Could not reschedule task.')),
+    });
   }
 
   return (
@@ -998,6 +1023,7 @@ function RescheduleModal({
           </div>
         </form>
       </div>
+      {documentationDialog}
     </div>
   );
 }

@@ -11,6 +11,7 @@ import {
 } from '@dnd-kit/core';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useTaskChangeDocumentation } from './useTaskChangeDocumentation';
 import {
   addLocalDays,
   formatWeekRangeLabel,
@@ -22,7 +23,7 @@ import type { Contact } from '../../lib/contacts';
 import type { Deal } from '../../lib/deals';
 import type { Lead } from '../../lib/leads';
 import type { MembershipOption } from '../../lib/memberships';
-import { updateTask, type EntityType, type Task, type TaskStatus } from '../../lib/tasks';
+import { previewTaskUpdate, updateTask, type EntityType, type Task, type TaskStatus } from '../../lib/tasks';
 
 const ENTITY_LABELS: Record<EntityType, string> = {
   LEAD: 'Lead',
@@ -291,6 +292,7 @@ export function TaskCalendarView({
   const [noDueDatePanelCollapsed, setNoDueDatePanelCollapsed] = useState(getInitialNoDueDatePanelCollapsed);
   const [hasNoDueDatePanelPreference, setHasNoDueDatePanelPreference] = useState(hasStoredNoDueDatePanelPreference);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: getTaskActionError });
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
 
   useEffect(() => {
@@ -372,19 +374,29 @@ export function TaskCalendarView({
 
     const previousTasks = localTasks;
     const nextDueAt = buildRescheduledDueAt(task, targetDayKey);
-    setActionError(null);
-    setSavingTaskId(task.id);
-    setLocalTasks((current) => current.map((currentTask) => (currentTask.id === task.id ? { ...currentTask, dueAt: nextDueAt } : currentTask)));
-
-    try {
-      await updateTask(accessToken, task.id, { dueAt: nextDueAt });
-      onChanged();
-    } catch (error) {
-      setLocalTasks(previousTasks);
-      setActionError(getTaskActionError(error));
-    } finally {
-      setSavingTaskId(null);
-    }
+    const input = { dueAt: nextDueAt };
+    runTaskChange({
+      task,
+      preview: previewTaskUpdate(task, input),
+      source: 'calendar',
+      title: 'Confirm task due date change',
+      description: 'Review this Task due date change before saving.',
+      run: async (context) => {
+        setActionError(null);
+        setSavingTaskId(task.id);
+        setLocalTasks((current) => current.map((currentTask) => (currentTask.id === task.id ? { ...currentTask, dueAt: nextDueAt } : currentTask)));
+        try {
+          await updateTask(accessToken, task.id, input, context);
+          onChanged();
+        } finally {
+          setSavingTaskId(null);
+        }
+      },
+      onError: (error) => {
+        setLocalTasks(previousTasks);
+        setActionError(getTaskActionError(error));
+      },
+    });
   };
 
   const handleNoDueDatePanelToggle = () => {
@@ -507,6 +519,7 @@ export function TaskCalendarView({
           />
         </div>
       </DndContext>
+      {documentationDialog}
     </section>
   );
 }

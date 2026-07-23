@@ -56,6 +56,7 @@ import type {
 } from '../lib/leads';
 import { listMembershipOptions, type MembershipOption } from '../lib/memberships';
 import {
+  buildTaskMutationContext,
   createTask,
   getNextFollowUpTask,
   listTasks,
@@ -453,7 +454,7 @@ export function LeadsPage() {
 
   async function handleCreateFollowUp(input: CreateTaskInput) {
     if (!accessToken) return false;
-    await createTask(accessToken, input);
+    await createTask(accessToken, input, buildTaskMutationContext(user, 'table'));
     await refreshLeadTasks();
     await refetch();
     closeFollowUpModal();

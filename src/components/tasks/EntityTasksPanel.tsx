@@ -1,16 +1,24 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
+import { ChangeDocumentationDialog, type ChangeDocumentationResult } from '../activities/ChangeDocumentationDialog';
 import { useAuth } from '../../context/AuthContext';
+import { buildChangeSummaryItems } from '../../lib/activity-formatting';
+import { shouldRequestChangeDocumentation } from '../../lib/change-documentation-settings';
 import type { HttpError } from '../../lib/http';
 import { listMembershipOptions, type MembershipOption } from '../../lib/memberships';
 import {
+  buildTaskMutationContext,
   completeTask,
   createTask,
   listTasks,
+  previewTaskComplete,
+  previewTaskReopen,
   reopenTask,
   type CreateTaskInput,
   type EntityType,
   type Task,
+  type TaskActivityPreview,
+  type TaskMutationContext,
   type TaskStatus,
   type TasksResponse,
 } from '../../lib/tasks';
@@ -26,6 +34,15 @@ type EntityTasksPanelProps = {
 type RequestError = {
   status: number;
   message: string;
+};
+
+type TaskDocumentationRequest = {
+  title: string;
+  description: string;
+  subjectLabel: string;
+  changes: ReturnType<typeof buildChangeSummaryItems>;
+  confirmLabel?: string;
+  onConfirm: (result: ChangeDocumentationResult) => Promise<void>;
 };
 
 type TaskFormState = {
@@ -138,7 +155,7 @@ function getStatusClassName(status: TaskStatus) {
 }
 
 export function EntityTasksPanel({ entityType, entityId, title = 'Related tasks', onTasksChanged }: EntityTasksPanelProps) {
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
   const [tasksData, setTasksData] = useState<TasksResponse | null>(null);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState<RequestError | null>(null);
@@ -152,6 +169,9 @@ export function EntityTasksPanel({ entityType, entityId, title = 'Related tasks'
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [documentationRequest, setDocumentationRequest] = useState<TaskDocumentationRequest | null>(null);
+  const [documentationSubmitting, setDocumentationSubmitting] = useState(false);
+  const [documentationError, setDocumentationError] = useState<string | null>(null);
 
   const membershipsByUserId = useMemo(() => new Map(memberships.map((membership) => [membership.userId, membership])), [memberships]);
   const tasks = tasksData?.data ?? [];
@@ -289,7 +309,7 @@ export function EntityTasksPanel({ entityType, entityId, title = 'Related tasks'
     setSuccessMessage(null);
 
     try {
-      await createTask(accessToken, buildCreateTaskInput(entityType, entityId, form));
+      await createTask(accessToken, buildCreateTaskInput(entityType, entityId, form), buildTaskMutationContext(user, 'embedded_task_panel'));
       resetForm();
       setShowCreateForm(false);
       setSuccessMessage('Task created.');
@@ -436,6 +456,10 @@ export function EntityTasksPanel({ entityType, entityId, title = 'Related tasks'
               onChanged={refreshTasks}
               onTasksChanged={onTasksChanged}
               onOpenTask={setSelectedTask}
+              onRequestDocumentation={(request) => {
+                setDocumentationError(null);
+                setDocumentationRequest(request);
+              }}
             />
           ))}
           {totalTasks > tasks.length ? (
@@ -454,6 +478,7 @@ export function EntityTasksPanel({ entityType, entityId, title = 'Related tasks'
           memberships={memberships}
           entityLabel={entityLabel}
           entityPath={entityPath}
+          mutationSource="embedded_task_panel"
           onClose={() => setSelectedTask(null)}
           onSaved={(updatedTask) => {
             setSelectedTask(updatedTask);
@@ -462,6 +487,36 @@ export function EntityTasksPanel({ entityType, entityId, title = 'Related tasks'
           }}
         />
       ) : null}
+      <ChangeDocumentationDialog
+        open={Boolean(documentationRequest)}
+        mode="optional-comment"
+        title={documentationRequest?.title ?? ''}
+        description={documentationRequest?.description}
+        subjectLabel={documentationRequest?.subjectLabel}
+        changes={documentationRequest?.changes ?? []}
+        confirmLabel={documentationRequest?.confirmLabel}
+        submitting={documentationSubmitting}
+        error={documentationError}
+        onCancel={() => {
+          if (!documentationSubmitting) {
+            setDocumentationRequest(null);
+            setDocumentationError(null);
+          }
+        }}
+        onConfirm={async (result) => {
+          if (!documentationRequest) return;
+          setDocumentationSubmitting(true);
+          setDocumentationError(null);
+          try {
+            await documentationRequest.onConfirm(result);
+            setDocumentationRequest(null);
+          } catch (error) {
+            setDocumentationError(getTaskActionError(error));
+          } finally {
+            setDocumentationSubmitting(false);
+          }
+        }}
+      />
     </section>
   );
 }
@@ -473,9 +528,11 @@ type EmbeddedTaskCardProps = {
   onChanged: () => void;
   onTasksChanged?: () => void;
   onOpenTask: (task: Task) => void;
+  onRequestDocumentation: (request: TaskDocumentationRequest) => void;
 };
 
-function EmbeddedTaskCard({ task, accessToken, membershipsByUserId, onChanged, onTasksChanged, onOpenTask }: EmbeddedTaskCardProps) {
+function EmbeddedTaskCard({ task, accessToken, membershipsByUserId, onChanged, onTasksChanged, onOpenTask, onRequestDocumentation }: EmbeddedTaskCardProps) {
+  const { user } = useAuth();
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const completed = isTaskCompleted(task);
@@ -488,23 +545,42 @@ function EmbeddedTaskCard({ task, accessToken, membershipsByUserId, onChanged, o
       return;
     }
 
-    setActionLoading(true);
-    setActionError(null);
-
-    try {
-      if (completed) {
-        await reopenTask(accessToken, task.id);
-      } else {
-        await completeTask(accessToken, task.id);
+    const preview = completed ? previewTaskReopen(task) : previewTaskComplete(task);
+    const execute = async (result?: ChangeDocumentationResult) => {
+      setActionLoading(true);
+      setActionError(null);
+      try {
+        const context = buildTaskMutationContext(user, 'embedded_task_panel', result ?? undefined);
+        if (completed) {
+          await reopenTask(accessToken, task.id, context);
+        } else {
+          await completeTask(accessToken, task.id, context);
+        }
+        onChanged();
+        onTasksChanged?.();
+      } catch (requestError) {
+        setActionError(getTaskActionError(requestError));
+        throw requestError;
+      } finally {
+        setActionLoading(false);
       }
+    };
 
-      onChanged();
-      onTasksChanged?.();
-    } catch (requestError) {
-      setActionError(getTaskActionError(requestError));
-    } finally {
-      setActionLoading(false);
+    if (preview.isDirectLeadTask && preview.documentationActions.some((action) => shouldRequestChangeDocumentation(action))) {
+      onRequestDocumentation({
+        title: completed ? 'Reopen task?' : 'Complete task?',
+        description: 'Review this Task status change before saving.',
+        subjectLabel: task.title,
+        changes: buildChangeSummaryItems(preview.changes),
+        confirmLabel: completed ? 'Reopen task' : 'Complete task',
+        onConfirm: execute,
+      });
+      return;
     }
+
+    void execute().catch(() => {
+      // Error state is shown on the task card.
+    });
   };
 
   return (

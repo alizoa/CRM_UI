@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
+import { useTaskChangeDocumentation } from '../tasks/useTaskChangeDocumentation';
 import { useAuth } from '../../context/AuthContext';
 import { markDealLost, markDealWon, moveDeal } from '../../lib/deals';
 import type { HttpError } from '../../lib/http';
 import { listMembershipOptions, type MembershipOption } from '../../lib/memberships';
 import { listPipelines, listPipelineStages, type Pipeline, type PipelineStage } from '../../lib/pipelines';
-import { completeTask } from '../../lib/tasks';
+import { buildTaskMutationContext, completeTask, listTasks, previewTaskComplete } from '../../lib/tasks';
 import {
   createWhatsappConversationDeal,
   createWhatsappConversationNote,
@@ -149,7 +150,7 @@ function DealStageSelector({
   deal: WhatsappCrmContext['deals'][number];
   onChanged: () => void;
 }) {
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -338,13 +339,16 @@ export function CrmContextPanel({
   onContextChanged,
   variant = 'default',
 }: CrmContextPanelProps) {
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
   const [context, setContext] = useState<WhatsappCrmContext | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null);
   const [taskFeedback, setTaskFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({
+    getErrorMessage: (requestError) => toRequestError(requestError, 'Could not complete task.').message,
+  });
   const [activeAction, setActiveAction] = useState<QuickAction | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -529,21 +533,47 @@ export function CrmContextPanel({
   async function handleCompleteTask(taskId: string) {
     if (!accessToken || completingTaskId) return;
 
-    setCompletingTaskId(taskId);
-    setTaskFeedback(null);
-    try {
-      await completeTask(accessToken, taskId);
-      setTaskFeedback({ kind: 'success', message: 'Task completed.' });
-      setRefreshKey((current) => current + 1);
-      onContextChanged?.();
-    } catch (requestError) {
-      setTaskFeedback({
-        kind: 'error',
-        message: toRequestError(requestError, 'Could not complete task.').message,
-      });
-    } finally {
-      setCompletingTaskId(null);
+    const task = (await listTasks(accessToken, { limit: 500 })).data.find((item) => item.id === taskId);
+    const complete = async (context = buildTaskMutationContext(user, 'whatsapp_context')) => {
+      setCompletingTaskId(taskId);
+      setTaskFeedback(null);
+      try {
+        await completeTask(accessToken, taskId, context);
+        setTaskFeedback({ kind: 'success', message: 'Task completed.' });
+        setRefreshKey((current) => current + 1);
+        onContextChanged?.();
+      } finally {
+        setCompletingTaskId(null);
+      }
+    };
+
+    if (!task) {
+      try {
+        await complete();
+      } catch (requestError) {
+        setTaskFeedback({
+          kind: 'error',
+          message: toRequestError(requestError, 'Could not complete task.').message,
+        });
+      }
+      return;
     }
+
+    runTaskChange({
+      task,
+      preview: previewTaskComplete(task),
+      source: 'whatsapp_context',
+      title: 'Complete task?',
+      description: 'Review this Task completion before saving.',
+      confirmLabel: 'Complete task',
+      run: complete,
+      onError: (requestError) => {
+        setTaskFeedback({
+          kind: 'error',
+          message: toRequestError(requestError, 'Could not complete task.').message,
+        });
+      },
+    });
   }
 
   async function handleTaskSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1013,6 +1043,7 @@ export function CrmContextPanel({
         </div>
       </div>
     ) : null}
+      {documentationDialog}
     </>
   );
 }

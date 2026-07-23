@@ -63,6 +63,7 @@ function actionLabel(action: string) {
     'lead.owner_changed': 'Owner changed',
     'task.created': 'Task created',
     'task.updated': 'Task updated',
+    'task.status_changed': 'Task status changed',
     'task.rescheduled': 'Task rescheduled',
     'task.assigned': 'Task assigned',
     'task.completed': 'Task completed',

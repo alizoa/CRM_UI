@@ -5,6 +5,7 @@ import { AppShell } from '../components/layout/AppShell';
 import { TaskCalendarView } from '../components/tasks/TaskCalendarView';
 import { TaskDetailModal } from '../components/tasks/TaskDetailModal';
 import { TaskKanbanView } from '../components/tasks/TaskKanbanView';
+import { useTaskChangeDocumentation } from '../components/tasks/useTaskChangeDocumentation';
 import { useAuth } from '../context/AuthContext';
 import type { Contact } from '../lib/contacts';
 import type { Deal } from '../lib/deals';
@@ -12,9 +13,14 @@ import type { HttpError } from '../lib/http';
 import { listLeads, type Lead } from '../lib/leads';
 import { listMembershipOptions, type MembershipOption } from '../lib/memberships';
 import {
+  buildTaskMutationContext,
   completeTask,
   createTask,
   listTasks,
+  previewTaskComplete,
+  previewTaskReopen,
+  previewTaskStatusChange,
+  previewTaskUpdate,
   reopenTask,
   updateTask,
   type CreateTaskInput,
@@ -1259,7 +1265,7 @@ export function TasksPage() {
       selectedDueFilters.length > 0;
 
     try {
-      await createTask(accessToken, createdTaskInput);
+      await createTask(accessToken, createdTaskInput, buildTaskMutationContext(user, 'table'));
       resetCreateForm();
       setShowCreateForm(false);
       setPage(1);
@@ -1611,6 +1617,7 @@ export function TasksPage() {
             memberships={memberships}
             entityLabel={selectedTaskEntityLabel}
             entityPath={selectedTaskEntityPath}
+            mutationSource={viewMode === 'kanban' ? 'kanban' : viewMode === 'calendar' ? 'calendar' : 'table'}
             onClose={() => setSelectedTask(null)}
             onSaved={(updatedTask) => {
               setSelectedTask(updatedTask);
@@ -2442,30 +2449,38 @@ type TaskCompletionButtonProps = {
 function TaskCompletionButton({ task, accessToken, onChanged }: TaskCompletionButtonProps) {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: getTaskActionError });
   const completed = isTaskCompleted(task);
 
-  const runAction = async () => {
+  const runAction = () => {
     if (!accessToken) {
       setActionError('You need to sign in before updating tasks.');
       return;
     }
 
-    setActionLoading(true);
-    setActionError(null);
-
-    try {
-      if (completed) {
-        await reopenTask(accessToken, task.id);
-      } else {
-        await completeTask(accessToken, task.id);
-      }
-
-      onChanged();
-    } catch (requestError) {
-      setActionError(getTaskActionError(requestError));
-    } finally {
-      setActionLoading(false);
-    }
+    runTaskChange({
+      task,
+      preview: completed ? previewTaskReopen(task) : previewTaskComplete(task),
+      source: 'table',
+      title: completed ? 'Reopen task?' : 'Complete task?',
+      description: 'Review this Task status change before saving.',
+      confirmLabel: completed ? 'Reopen task' : 'Complete task',
+      run: async (context) => {
+        setActionLoading(true);
+        setActionError(null);
+        try {
+          if (completed) {
+            await reopenTask(accessToken, task.id, context);
+          } else {
+            await completeTask(accessToken, task.id, context);
+          }
+          onChanged();
+        } finally {
+          setActionLoading(false);
+        }
+      },
+      onError: (requestError) => setActionError(getTaskActionError(requestError)),
+    });
   };
 
   return (
@@ -2483,6 +2498,7 @@ function TaskCompletionButton({ task, accessToken, onChanged }: TaskCompletionBu
         {actionLoading ? 'Updating...' : completed ? 'Reopen' : 'Complete'}
       </button>
       {actionError ? <p className="mt-2 text-sm text-red-700">{actionError}</p> : null}
+      {documentationDialog}
     </div>
   );
 }
@@ -2597,8 +2613,9 @@ function InlineTaskStatusControl({
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: getTaskActionError });
 
-  const handleChange = async (nextStatus: TaskStatus) => {
+  const handleChange = (nextStatus: TaskStatus) => {
     if (nextStatus === task.status || saving) {
       return;
     }
@@ -2608,17 +2625,38 @@ function InlineTaskStatusControl({
       return;
     }
 
-    setSaving(true);
-    setError(null);
+    const completed = task.status === 'DONE';
+    const preview = nextStatus === 'DONE'
+      ? previewTaskComplete(task)
+      : completed
+        ? previewTaskReopen(task)
+        : previewTaskStatusChange(task, nextStatus);
 
-    try {
-      await updateTask(accessToken, task.id, { status: nextStatus });
-      onChanged();
-    } catch (requestError) {
-      setError(getTaskActionError(requestError));
-    } finally {
-      setSaving(false);
-    }
+    runTaskChange({
+      task,
+      preview,
+      source: 'table',
+      title: nextStatus === 'DONE' ? 'Complete task?' : completed ? 'Reopen task?' : 'Confirm task status change',
+      description: 'Review this Task status change before saving.',
+      confirmLabel: nextStatus === 'DONE' ? 'Complete task' : completed ? 'Reopen task' : undefined,
+      run: async (context) => {
+        setSaving(true);
+        setError(null);
+        try {
+          if (nextStatus === 'DONE') {
+            await completeTask(accessToken, task.id, context);
+          } else if (completed) {
+            await reopenTask(accessToken, task.id, context);
+          } else {
+            await updateTask(accessToken, task.id, { status: nextStatus }, context);
+          }
+          onChanged();
+        } finally {
+          setSaving(false);
+        }
+      },
+      onError: (requestError) => setError(getTaskActionError(requestError)),
+    });
   };
 
   return (
@@ -2637,6 +2675,7 @@ function InlineTaskStatusControl({
         ))}
       </select>
       {error ? <p className="max-w-40 text-xs text-red-700">{error}</p> : null}
+      {documentationDialog}
     </div>
   );
 }
@@ -2654,9 +2693,10 @@ function InlineTaskAssigneeControl({
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: getTaskActionError });
   const memberships = Array.from(membershipsByUserId.values());
 
-  const handleChange = async (nextAssigneeId: string) => {
+  const handleChange = (nextAssigneeId: string) => {
     const normalizedAssigneeId = nextAssigneeId || null;
     if (normalizedAssigneeId === task.assigneeId || saving) {
       return;
@@ -2667,17 +2707,25 @@ function InlineTaskAssigneeControl({
       return;
     }
 
-    setSaving(true);
-    setError(null);
-
-    try {
-      await updateTask(accessToken, task.id, { assigneeId: normalizedAssigneeId });
-      onChanged();
-    } catch (requestError) {
-      setError(getTaskActionError(requestError));
-    } finally {
-      setSaving(false);
-    }
+    const input = { assigneeId: normalizedAssigneeId };
+    runTaskChange({
+      task,
+      preview: previewTaskUpdate(task, input),
+      source: 'table',
+      title: 'Confirm task assignee change',
+      description: 'Review this Task assignee change before saving.',
+      run: async (context) => {
+        setSaving(true);
+        setError(null);
+        try {
+          await updateTask(accessToken, task.id, input, context);
+          onChanged();
+        } finally {
+          setSaving(false);
+        }
+      },
+      onError: (requestError) => setError(getTaskActionError(requestError)),
+    });
   };
 
   return (
@@ -2697,6 +2745,7 @@ function InlineTaskAssigneeControl({
         ))}
       </select>
       {error ? <p className="max-w-40 text-xs text-red-700">{error}</p> : null}
+      {documentationDialog}
     </div>
   );
 }
@@ -2705,12 +2754,13 @@ function InlineTaskDueControl({ task, accessToken, onChanged }: { task: Task; ac
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [value, setValue] = useState(() => toLocalDateTimeInput(task.dueAt));
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: getTaskActionError });
 
   useEffect(() => {
     setValue(toLocalDateTimeInput(task.dueAt));
   }, [task.dueAt]);
 
-  const handleBlur = async () => {
+  const handleBlur = () => {
     const nextDueAt = value ? new Date(value).toISOString() : null;
     if ((task.dueAt ?? null) === nextDueAt || saving) {
       return;
@@ -2722,18 +2772,29 @@ function InlineTaskDueControl({ task, accessToken, onChanged }: { task: Task; ac
       return;
     }
 
-    setSaving(true);
-    setError(null);
-
-    try {
-      await updateTask(accessToken, task.id, { dueAt: nextDueAt });
-      onChanged();
-    } catch (requestError) {
-      setValue(toLocalDateTimeInput(task.dueAt));
-      setError(getTaskActionError(requestError));
-    } finally {
-      setSaving(false);
-    }
+    const input = { dueAt: nextDueAt };
+    runTaskChange({
+      task,
+      preview: previewTaskUpdate(task, input),
+      source: 'table',
+      title: 'Confirm task due date change',
+      description: 'Review this Task due date change before saving.',
+      run: async (context) => {
+        setSaving(true);
+        setError(null);
+        try {
+          await updateTask(accessToken, task.id, input, context);
+          onChanged();
+        } finally {
+          setSaving(false);
+        }
+      },
+      onCancel: () => setValue(toLocalDateTimeInput(task.dueAt)),
+      onError: (requestError) => {
+        setValue(toLocalDateTimeInput(task.dueAt));
+        setError(getTaskActionError(requestError));
+      },
+    });
   };
 
   return (
@@ -2749,6 +2810,7 @@ function InlineTaskDueControl({ task, accessToken, onChanged }: { task: Task; ac
       />
       {saving ? <p className="text-xs text-gray-500">Saving...</p> : null}
       {error ? <p className="max-w-44 text-xs text-red-700">{error}</p> : null}
+      {documentationDialog}
     </div>
   );
 }
@@ -2767,6 +2829,7 @@ type TaskCardProps = {
 function TaskCard({ task, contactsById, dealsById, leadsById, membershipsByUserId, accessToken, onChanged, onOpenTask }: TaskCardProps) {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: getTaskActionError });
   const contact = task.entityType === 'CONTACT' ? contactsById.get(task.entityId) : undefined;
   const deal = task.entityType === 'DEAL' ? dealsById.get(task.entityId) : undefined;
   const lead = task.entityType === 'LEAD' ? leadsById.get(task.entityId) : undefined;
@@ -2789,28 +2852,35 @@ function TaskCard({ task, contactsById, dealsById, leadsById, membershipsByUserI
       : '';
   const openRecordLabel = 'Open lead';
 
-  const runAction = async () => {
+  const runAction = () => {
     if (!accessToken) {
       setActionError('You need to sign in before updating tasks.');
       return;
     }
 
-    setActionLoading(true);
-    setActionError(null);
-
-    try {
-      if (completed) {
-        await reopenTask(accessToken, task.id);
-      } else {
-        await completeTask(accessToken, task.id);
-      }
-
-      onChanged();
-    } catch (requestError) {
-      setActionError(getTaskActionError(requestError));
-    } finally {
-      setActionLoading(false);
-    }
+    runTaskChange({
+      task,
+      preview: completed ? previewTaskReopen(task) : previewTaskComplete(task),
+      source: 'table',
+      title: completed ? 'Reopen task?' : 'Complete task?',
+      description: 'Review this Task status change before saving.',
+      confirmLabel: completed ? 'Reopen task' : 'Complete task',
+      run: async (context) => {
+        setActionLoading(true);
+        setActionError(null);
+        try {
+          if (completed) {
+            await reopenTask(accessToken, task.id, context);
+          } else {
+            await completeTask(accessToken, task.id, context);
+          }
+          onChanged();
+        } finally {
+          setActionLoading(false);
+        }
+      },
+      onError: (requestError) => setActionError(getTaskActionError(requestError)),
+    });
   };
 
   const cardClassName = completed
@@ -2897,6 +2967,7 @@ function TaskCard({ task, contactsById, dealsById, leadsById, membershipsByUserI
         </div>
       </div>
       {actionError ? <p className="mt-3 text-sm text-red-700">{actionError}</p> : null}
+      {documentationDialog}
     </article>
   );
 }

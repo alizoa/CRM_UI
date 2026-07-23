@@ -11,12 +11,16 @@ import {
 } from '@dnd-kit/core';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useTaskChangeDocumentation } from './useTaskChangeDocumentation';
 import type { Contact } from '../../lib/contacts';
 import type { Deal } from '../../lib/deals';
 import type { Lead } from '../../lib/leads';
 import type { MembershipOption } from '../../lib/memberships';
 import {
   completeTask,
+  previewTaskComplete,
+  previewTaskReopen,
+  previewTaskStatusChange,
   reopenTask,
   updateTaskStatus,
   type EntityType,
@@ -276,6 +280,7 @@ export function TaskKanbanView({
   const [localTasks, setLocalTasks] = useState(tasks);
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: getTaskActionError });
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -325,21 +330,30 @@ export function TaskKanbanView({
     }
 
     const previousTasks = localTasks;
-    setActionError(null);
-    setSavingTaskId(task.id);
-    setLocalTasks((current) =>
-      current.map((currentTask) => (currentTask.id === task.id ? { ...currentTask, status: nextStatus } : currentTask)),
-    );
-
-    try {
-      await updateTaskStatus(accessToken, task.id, nextStatus);
-      onChanged();
-    } catch (error) {
-      setLocalTasks(previousTasks);
-      setActionError(getTaskActionError(error));
-    } finally {
-      setSavingTaskId(null);
-    }
+    runTaskChange({
+      task,
+      preview: previewTaskStatusChange(task, nextStatus),
+      source: 'kanban',
+      title: 'Confirm task status change',
+      description: 'Review this Task status change before saving.',
+      run: async (context) => {
+        setActionError(null);
+        setSavingTaskId(task.id);
+        setLocalTasks((current) =>
+          current.map((currentTask) => (currentTask.id === task.id ? { ...currentTask, status: nextStatus } : currentTask)),
+        );
+        try {
+          await updateTaskStatus(accessToken, task.id, nextStatus, context);
+          onChanged();
+        } finally {
+          setSavingTaskId(null);
+        }
+      },
+      onError: (error) => {
+        setLocalTasks(previousTasks);
+        setActionError(getTaskActionError(error));
+      },
+    });
   };
 
   return (
@@ -369,6 +383,7 @@ export function TaskKanbanView({
           </div>
         </div>
       </DndContext>
+      {documentationDialog}
     </section>
   );
 }
@@ -535,8 +550,9 @@ type TaskCompletionButtonProps = {
 function TaskKanbanStatusSelect({ task, accessToken, onChanged }: TaskCompletionButtonProps) {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: getTaskActionError });
 
-  const runAction = async (nextStatus: TaskStatus) => {
+  const runAction = (nextStatus: TaskStatus) => {
     if (nextStatus === task.status || actionLoading) {
       return;
     }
@@ -546,17 +562,24 @@ function TaskKanbanStatusSelect({ task, accessToken, onChanged }: TaskCompletion
       return;
     }
 
-    setActionLoading(true);
-    setActionError(null);
-
-    try {
-      await updateTaskStatus(accessToken, task.id, nextStatus);
-      onChanged();
-    } catch (requestError) {
-      setActionError(getTaskActionError(requestError));
-    } finally {
-      setActionLoading(false);
-    }
+    runTaskChange({
+      task,
+      preview: previewTaskStatusChange(task, nextStatus),
+      source: 'kanban',
+      title: 'Confirm task status change',
+      description: 'Review this Task status change before saving.',
+      run: async (context) => {
+        setActionLoading(true);
+        setActionError(null);
+        try {
+          await updateTaskStatus(accessToken, task.id, nextStatus, context);
+          onChanged();
+        } finally {
+          setActionLoading(false);
+        }
+      },
+      onError: (requestError) => setActionError(getTaskActionError(requestError)),
+    });
   };
 
   return (
@@ -575,6 +598,7 @@ function TaskKanbanStatusSelect({ task, accessToken, onChanged }: TaskCompletion
         ))}
       </select>
       {actionError ? <p className="max-w-44 text-xs text-red-700">{actionError}</p> : null}
+      {documentationDialog}
     </div>
   );
 }
@@ -582,30 +606,38 @@ function TaskKanbanStatusSelect({ task, accessToken, onChanged }: TaskCompletion
 function TaskCompletionButton({ task, accessToken, onChanged }: TaskCompletionButtonProps) {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { runTaskChange, documentationDialog } = useTaskChangeDocumentation({ getErrorMessage: getTaskActionError });
   const completed = isTaskCompleted(task);
 
-  const runAction = async () => {
+  const runAction = () => {
     if (!accessToken) {
       setActionError('You need to sign in before updating tasks.');
       return;
     }
 
-    setActionLoading(true);
-    setActionError(null);
-
-    try {
-      if (completed) {
-        await reopenTask(accessToken, task.id);
-      } else {
-        await completeTask(accessToken, task.id);
-      }
-
-      onChanged();
-    } catch (requestError) {
-      setActionError(getTaskActionError(requestError));
-    } finally {
-      setActionLoading(false);
-    }
+    runTaskChange({
+      task,
+      preview: completed ? previewTaskReopen(task) : previewTaskComplete(task),
+      source: 'kanban',
+      title: completed ? 'Reopen task?' : 'Complete task?',
+      description: 'Review this Task status change before saving.',
+      confirmLabel: completed ? 'Reopen task' : 'Complete task',
+      run: async (context) => {
+        setActionLoading(true);
+        setActionError(null);
+        try {
+          if (completed) {
+            await reopenTask(accessToken, task.id, context);
+          } else {
+            await completeTask(accessToken, task.id, context);
+          }
+          onChanged();
+        } finally {
+          setActionLoading(false);
+        }
+      },
+      onError: (requestError) => setActionError(getTaskActionError(requestError)),
+    });
   };
 
   return (
@@ -623,6 +655,7 @@ function TaskCompletionButton({ task, accessToken, onChanged }: TaskCompletionBu
         {actionLoading ? 'Updating...' : completed ? 'Reopen' : 'Mark Done'}
       </button>
       {actionError ? <p className="mt-2 text-sm text-red-700">{actionError}</p> : null}
+      {documentationDialog}
     </div>
   );
 }

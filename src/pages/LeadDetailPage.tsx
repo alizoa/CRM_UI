@@ -8,6 +8,7 @@ import { AppShell } from '../components/layout/AppShell';
 import { EntityNotesPanel } from '../components/notes/EntityNotesPanel';
 import { EntityTasksPanel } from '../components/tasks/EntityTasksPanel';
 import { TaskDetailModal } from '../components/tasks/TaskDetailModal';
+import { useTaskChangeDocumentation } from '../components/tasks/useTaskChangeDocumentation';
 import { useAuth } from '../context/AuthContext';
 import { buildChangeSummaryItems } from '../lib/activity-formatting';
 import { listActivities, subscribeToActivityChanges, type Activity } from '../lib/activities';
@@ -35,7 +36,7 @@ import {
 } from '../lib/leads';
 import { listMembershipOptions, type MembershipOption } from '../lib/memberships';
 import { formatRelativeTime } from '../lib/relative-time';
-import { completeTask, isOpenFollowUpTask, listTasks, type Task, type TaskStatus } from '../lib/tasks';
+import { completeTask, isOpenFollowUpTask, listTasks, previewTaskComplete, type Task, type TaskStatus } from '../lib/tasks';
 
 type RequestError = { status: number; message: string };
 type FormState = {
@@ -323,6 +324,9 @@ export function LeadDetailPage() {
   const [documentationRequest, setDocumentationRequest] = useState<LeadDocumentationRequest | null>(null);
   const [documentationSubmitting, setDocumentationSubmitting] = useState(false);
   const [documentationError, setDocumentationError] = useState<string | null>(null);
+  const { runTaskChange, documentationDialog: taskDocumentationDialog } = useTaskChangeDocumentation({
+    getErrorMessage: (requestFailure) => requestError(requestFailure, 'Could not complete follow-up.').message,
+  });
 
   const fetchLead = useCallback(async () => {
     if (!accessToken || !id) {
@@ -600,20 +604,29 @@ export function LeadDetailPage() {
     });
   }
 
-  async function completeFollowUp() {
+  function completeFollowUp() {
     if (!accessToken || !nextActionTask) return;
-    setTaskActionLoading(true);
-    setActionError(null);
-    setSuccess(null);
-    try {
-      await completeTask(accessToken, nextActionTask.id);
-      setSuccess('Follow-up completed.');
-      refreshLeadTasks();
-    } catch (requestFailure) {
-      setActionError(requestError(requestFailure, 'Could not complete follow-up.'));
-    } finally {
-      setTaskActionLoading(false);
-    }
+    runTaskChange({
+      task: nextActionTask,
+      preview: previewTaskComplete(nextActionTask),
+      source: 'details',
+      title: 'Complete follow-up?',
+      description: 'Review this Task completion before saving.',
+      confirmLabel: 'Complete task',
+      run: async (context) => {
+        setTaskActionLoading(true);
+        setActionError(null);
+        setSuccess(null);
+        try {
+          await completeTask(accessToken, nextActionTask.id, context);
+          setSuccess('Follow-up completed.');
+          refreshLeadTasks();
+        } finally {
+          setTaskActionLoading(false);
+        }
+      },
+      onError: (requestFailure) => setActionError(requestError(requestFailure, 'Could not complete follow-up.')),
+    });
   }
 
   return (
@@ -750,6 +763,7 @@ export function LeadDetailPage() {
           }
         }}
       />
+      {taskDocumentationDialog}
 
     </AppShell>
   );

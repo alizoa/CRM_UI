@@ -1,16 +1,34 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
+import { ChangeDocumentationDialog, type ChangeDocumentationResult } from '../activities/ChangeDocumentationDialog';
 import { useAuth } from '../../context/AuthContext';
+import { buildChangeSummaryItems } from '../../lib/activity-formatting';
+import type { ActivityChangeSource } from '../../lib/activities';
+import { shouldRequestChangeDocumentation } from '../../lib/change-documentation-settings';
 import type { HttpError } from '../../lib/http';
 import { createNote, listNotes, type Note, type NotesResponse } from '../../lib/notes';
 import type { MembershipOption } from '../../lib/memberships';
-import { updateTask, type Task, type TaskStatus, type UpdateTaskInput } from '../../lib/tasks';
+import {
+  buildTaskMutationContext,
+  completeTask,
+  previewTaskComplete,
+  previewTaskReopen,
+  previewTaskUpdate,
+  reopenTask,
+  updateTask,
+  type Task,
+  type TaskActivityPreview,
+  type TaskMutationContext,
+  type TaskStatus,
+  type UpdateTaskInput,
+} from '../../lib/tasks';
 
 type TaskDetailModalProps = {
   task: Task;
   memberships: MembershipOption[];
   entityLabel: string;
   entityPath: string;
+  mutationSource?: ActivityChangeSource;
   onClose: () => void;
   onSaved: (task: Task) => void;
 };
@@ -26,6 +44,15 @@ type TaskEditForm = {
 type RequestError = {
   status: number;
   message: string;
+};
+
+type TaskDocumentationRequest = {
+  title: string;
+  description: string;
+  subjectLabel: string;
+  changes: ReturnType<typeof buildChangeSummaryItems>;
+  confirmLabel?: string;
+  onConfirm: (result: ChangeDocumentationResult) => Promise<void>;
 };
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -121,8 +148,8 @@ function getAuthorLabel(authorId: string | null, membershipsByUserId: Map<string
   return `User ${shortId(authorId)}`;
 }
 
-export function TaskDetailModal({ task, memberships, entityLabel, entityPath, onClose, onSaved }: TaskDetailModalProps) {
-  const { accessToken } = useAuth();
+export function TaskDetailModal({ task, memberships, entityLabel, entityPath, mutationSource = 'details', onClose, onSaved }: TaskDetailModalProps) {
+  const { accessToken, user } = useAuth();
   const [form, setForm] = useState<TaskEditForm>(() => buildInitialForm(task));
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveError, setSaveError] = useState<RequestError | null>(null);
@@ -134,9 +161,57 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, on
   const [commentLoading, setCommentLoading] = useState(false);
   const [commentError, setCommentError] = useState<RequestError | null>(null);
   const [commentRefreshKey, setCommentRefreshKey] = useState(0);
+  const [documentationRequest, setDocumentationRequest] = useState<TaskDocumentationRequest | null>(null);
+  const [documentationSubmitting, setDocumentationSubmitting] = useState(false);
+  const [documentationError, setDocumentationError] = useState<string | null>(null);
   const membershipsByUserId = useMemo(() => new Map(memberships.map((membership) => [membership.userId, membership])), [memberships]);
   const comments = commentsData?.data ?? [];
   const totalComments = commentsData?.total ?? comments.length;
+
+  function shouldPromptForPreview(preview: TaskActivityPreview) {
+    return preview.isDirectLeadTask && preview.documentationActions.some((action) => shouldRequestChangeDocumentation(action));
+  }
+
+  function openDocumentationDialog(request: TaskDocumentationRequest) {
+    setDocumentationError(null);
+    setDocumentationRequest(request);
+  }
+
+  function runOrPromptTaskChange({
+    preview,
+    title,
+    description,
+    confirmLabel,
+    run,
+  }: {
+    preview: TaskActivityPreview;
+    title: string;
+    description: string;
+    confirmLabel?: string;
+    run: (context: TaskMutationContext) => Promise<void>;
+  }) {
+    if (preview.changes.length === 0) return;
+
+    const execute = async (result?: ChangeDocumentationResult) => {
+      await run(buildTaskMutationContext(user, mutationSource, result ?? undefined));
+    };
+
+    if (!shouldPromptForPreview(preview)) {
+      void execute().catch(() => {
+        // Save handlers render their own error state.
+      });
+      return;
+    }
+
+    openDocumentationDialog({
+      title,
+      description,
+      subjectLabel: `${task.title}${entityLabel ? ` · ${entityLabel}` : ''}`,
+      changes: buildChangeSummaryItems(preview.changes),
+      confirmLabel,
+      onConfirm: execute,
+    });
+  }
 
   useEffect(() => {
     setForm(buildInitialForm(task));
@@ -208,23 +283,38 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, on
       return;
     }
 
-    setSaveLoading(true);
-    setSaveError(null);
-    setSaveSuccess(null);
-
-    try {
-      const updatedTask = await updateTask(accessToken, task.id, buildUpdateInput(form));
-      setSaveSuccess('Task saved.');
-      onSaved(updatedTask);
-    } catch (error) {
-      const requestError = toRequestError(error, 'Could not save task.');
-      setSaveError({
-        status: requestError.status,
-        message: requestError.status === 403 ? 'You do not have permission to update tasks.' : requestError.message,
-      });
-    } finally {
-      setSaveLoading(false);
+    const input = buildUpdateInput(form);
+    const preview = previewTaskUpdate(task, input);
+    if (preview.changes.length === 0) {
+      setSaveError(null);
+      setSaveSuccess('No task changes to save.');
+      return;
     }
+
+    runOrPromptTaskChange({
+      preview,
+      title: 'Confirm task changes',
+      description: 'Review these Task changes before saving.',
+      run: async (context) => {
+        setSaveLoading(true);
+        setSaveError(null);
+        setSaveSuccess(null);
+        try {
+          const updatedTask = await updateTask(accessToken, task.id, input, context);
+          setSaveSuccess('Task saved.');
+          onSaved(updatedTask);
+        } catch (error) {
+          const requestError = toRequestError(error, 'Could not save task.');
+          setSaveError({
+            status: requestError.status,
+            message: requestError.status === 403 ? 'You do not have permission to update tasks.' : requestError.message,
+          });
+          throw error;
+        } finally {
+          setSaveLoading(false);
+        }
+      },
+    });
   };
 
   const handleCreateComment = async (event: FormEvent<HTMLFormElement>) => {
@@ -268,25 +358,35 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, on
       return;
     }
 
-    const nextStatus: TaskStatus = task.status === 'DONE' ? 'TODO' : 'DONE';
-    setSaveLoading(true);
-    setSaveError(null);
-    setSaveSuccess(null);
+    const completed = task.status === 'DONE';
+    const preview = completed ? previewTaskReopen(task) : previewTaskComplete(task);
 
-    try {
-      const updatedTask = await updateTask(accessToken, task.id, { status: nextStatus });
-      setForm(buildInitialForm(updatedTask));
-      setSaveSuccess(nextStatus === 'DONE' ? 'Task completed.' : 'Task reopened.');
-      onSaved(updatedTask);
-    } catch (error) {
-      const requestError = toRequestError(error, 'Could not update task.');
-      setSaveError({
-        status: requestError.status,
-        message: requestError.status === 403 ? 'You do not have permission to update tasks.' : requestError.message,
-      });
-    } finally {
-      setSaveLoading(false);
-    }
+    runOrPromptTaskChange({
+      preview,
+      title: completed ? 'Reopen task?' : 'Complete task?',
+      description: 'Review this Task status change before saving.',
+      confirmLabel: completed ? 'Reopen task' : 'Complete task',
+      run: async (context) => {
+        setSaveLoading(true);
+        setSaveError(null);
+        setSaveSuccess(null);
+        try {
+          const updatedTask = completed ? await reopenTask(accessToken, task.id, context) : await completeTask(accessToken, task.id, context);
+          setForm(buildInitialForm(updatedTask));
+          setSaveSuccess(completed ? 'Task reopened.' : 'Task completed.');
+          onSaved(updatedTask);
+        } catch (error) {
+          const requestError = toRequestError(error, 'Could not update task.');
+          setSaveError({
+            status: requestError.status,
+            message: requestError.status === 403 ? 'You do not have permission to update tasks.' : requestError.message,
+          });
+          throw error;
+        } finally {
+          setSaveLoading(false);
+        }
+      },
+    });
   };
 
   return (
@@ -493,6 +593,36 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, on
           </section>
         </div>
       </div>
+      <ChangeDocumentationDialog
+        open={Boolean(documentationRequest)}
+        mode="optional-comment"
+        title={documentationRequest?.title ?? ''}
+        description={documentationRequest?.description}
+        subjectLabel={documentationRequest?.subjectLabel}
+        changes={documentationRequest?.changes ?? []}
+        confirmLabel={documentationRequest?.confirmLabel}
+        submitting={documentationSubmitting}
+        error={documentationError}
+        onCancel={() => {
+          if (!documentationSubmitting) {
+            setDocumentationRequest(null);
+            setDocumentationError(null);
+          }
+        }}
+        onConfirm={async (result) => {
+          if (!documentationRequest) return;
+          setDocumentationSubmitting(true);
+          setDocumentationError(null);
+          try {
+            await documentationRequest.onConfirm(result);
+            setDocumentationRequest(null);
+          } catch (error) {
+            setDocumentationError(toRequestError(error, 'Could not save change documentation.').message);
+          } finally {
+            setDocumentationSubmitting(false);
+          }
+        }}
+      />
     </div>
   );
 }
