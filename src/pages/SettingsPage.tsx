@@ -39,6 +39,7 @@ import {
   updateApprovedTemplate,
   type WhatsappApprovedTemplate,
 } from '../lib/whatsapp-approved-templates';
+import { ChangeDocumentationSettingsSection } from '../components/settings/ChangeDocumentationSettingsSection';
 import { WorkspaceSettingsSection } from '../components/settings/WorkspaceSettingsSection';
 
 type RequestError = {
@@ -46,12 +47,13 @@ type RequestError = {
   message: string;
 };
 
-type SettingsSection = 'general' | 'leads' | 'channels' | 'templates';
+type SettingsSection = 'general' | 'change-documentation' | 'leads' | 'channels' | 'templates';
 type LeadSettingsSubsection = 'sources' | 'tags';
 type ChannelSettingsSubsection = 'overview' | 'whatsapp' | 'website';
 
 const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: 'general', label: 'General' },
+  { id: 'change-documentation', label: 'Change documentation' },
   { id: 'leads', label: 'Lead Management' },
   { id: 'channels', label: 'Channels' },
   { id: 'templates', label: 'Templates' },
@@ -151,6 +153,7 @@ export function SettingsPage() {
 
         <div className="mx-auto w-full max-w-5xl">
           {section === 'general' ? <GeneralSettings /> : null}
+          {section === 'change-documentation' ? <ChangeDocumentationSettingsSection /> : null}
           {section === 'leads' ? <LeadManagementSettings subsection={leadSubsection} /> : null}
           {section === 'channels' ? <ChannelSettings subsection={channelSubsection} /> : null}
           {section === 'templates' ? <TemplateSettings /> : null}
