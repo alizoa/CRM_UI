@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ChangeDocumentationDialog, type ChangeDocumentationResult } from '../components/activities/ChangeDocumentationDialog';
 import { LeadOverviewCard } from '../components/leads/LeadOverviewCard';
 import { ActivityCommentTimeline } from '../components/leads/ActivityCommentTimeline';
 import { LeadSourceContextCard } from '../components/leads/LeadSourceContextCard';
@@ -8,17 +9,26 @@ import { EntityNotesPanel } from '../components/notes/EntityNotesPanel';
 import { EntityTasksPanel } from '../components/tasks/EntityTasksPanel';
 import { TaskDetailModal } from '../components/tasks/TaskDetailModal';
 import { useAuth } from '../context/AuthContext';
+import { buildChangeSummaryItems } from '../lib/activity-formatting';
 import { listActivities, subscribeToActivityChanges, type Activity } from '../lib/activities';
+import { shouldRequestChangeDocumentation } from '../lib/change-documentation-settings';
 import type { HttpError } from '../lib/http';
 import { listLeadSourceOptions, type LeadSourceOption } from '../lib/lead-sources';
 import {
   convertLead,
+  buildLeadMutationContext,
   deleteLead,
   getLead,
   markLeadLost,
+  previewLeadConvert,
+  previewLeadLost,
+  previewLeadReopen,
+  previewLeadUpdate,
   reopenLead,
   updateLead,
+  type LeadActivityPreview,
   type Lead,
+  type LeadMutationContext,
   type LeadStage,
   type LeadTemperature,
   type UpdateLeadInput,
@@ -36,6 +46,15 @@ type FormState = {
   temperature: LeadTemperature | '';
   ownerId: string;
   leadSourceId: string;
+};
+type LeadDocumentationRequest = {
+  mode: 'optional-comment' | 'required-reason';
+  title: string;
+  description: string;
+  subjectLabel: string;
+  changes: ReturnType<typeof buildChangeSummaryItems>;
+  confirmLabel?: string;
+  onConfirm: (result: ChangeDocumentationResult) => Promise<void>;
 };
 
 type ProgressStep =
@@ -281,7 +300,7 @@ const ICONS = {
 export function LeadDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
   const [lead, setLead] = useState<Lead | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [leadTasks, setLeadTasks] = useState<Task[]>([]);
@@ -301,6 +320,9 @@ export function LeadDetailPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [memberships, setMemberships] = useState<MembershipOption[]>([]);
   const [leadSources, setLeadSources] = useState<LeadSourceOption[]>([]);
+  const [documentationRequest, setDocumentationRequest] = useState<LeadDocumentationRequest | null>(null);
+  const [documentationSubmitting, setDocumentationSubmitting] = useState(false);
+  const [documentationError, setDocumentationError] = useState<string | null>(null);
 
   const fetchLead = useCallback(async () => {
     if (!accessToken || !id) {
@@ -387,63 +409,152 @@ export function LeadDetailPage() {
       ? `Last updated by ${leadOwnerName(lead)} · ${formatRelativeTime(lead.updatedAt) || formatDateTime(lead.updatedAt)}`
       : undefined;
 
+  function shouldPromptForPreview(preview: LeadActivityPreview) {
+    return preview.requiresReason || preview.documentationActions.some((action) => shouldRequestChangeDocumentation(action));
+  }
+
+  function openDocumentationDialog(request: LeadDocumentationRequest) {
+    setDocumentationError(null);
+    setDocumentationRequest(request);
+  }
+
+  function runOrPromptLeadChange({
+    preview,
+    title,
+    description,
+    confirmLabel,
+    run,
+    onError,
+  }: {
+    preview: LeadActivityPreview;
+    title: string;
+    description: string;
+    confirmLabel?: string;
+    run: (context: LeadMutationContext) => Promise<void>;
+    onError: (requestFailure: unknown) => void;
+  }) {
+    if (!lead || preview.changes.length === 0) return;
+
+    const execute = async (result?: ChangeDocumentationResult) => {
+      try {
+        await run(buildLeadMutationContext(user, 'details', result ?? undefined));
+      } catch (requestFailure) {
+        onError(requestFailure);
+        throw requestFailure;
+      }
+    };
+
+    if (!shouldPromptForPreview(preview)) {
+      void execute().catch(() => {
+        // Error state is shown by the caller-specific onError handler.
+      });
+      return;
+    }
+
+    openDocumentationDialog({
+      mode: preview.requiresReason ? 'required-reason' : 'optional-comment',
+      title,
+      description,
+      subjectLabel: leadName(lead),
+      changes: buildChangeSummaryItems(preview.changes),
+      confirmLabel,
+      onConfirm: execute,
+    });
+  }
+
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!accessToken || !lead || !form) return;
-    setSaveLoading(true);
-    setSaveError(null);
-    setSuccess(null);
-    try {
-      const response = await updateLead(accessToken, lead.id, updateInput(form));
+    const input = updateInput(form);
+    const preview = previewLeadUpdate(lead, input);
+    if (preview.changes.length === 0) {
+      setEditing(false);
+      setSaveError(null);
+      setSuccess('No lead changes to save.');
+      return;
+    }
+
+    const runSave = async (context: LeadMutationContext) => {
+      setSaveLoading(true);
+      setSaveError(null);
+      setSuccess(null);
+      const response = await updateLead(accessToken, lead.id, input, context);
       setLead(response);
       setForm(formState(response));
       setEditing(false);
       setSuccess('Lead updated.');
-    } catch (requestFailure) {
-      setSaveError(requestError(requestFailure, 'Could not update lead.'));
-    } finally {
       setSaveLoading(false);
-    }
+    };
+
+    const handleSaveError = (requestFailure: unknown) => {
+      setSaveError(requestError(requestFailure, 'Could not update lead.'));
+      setSaveLoading(false);
+    };
+
+    runOrPromptLeadChange({
+      preview,
+      title: 'Confirm lead details',
+      description: 'Review these Lead changes before saving.',
+      run: runSave,
+      onError: handleSaveError,
+    });
   }
 
-  async function lifecycle(action: 'lost' | 'reopen') {
+  function lifecycle(action: 'lost' | 'reopen') {
     if (!accessToken || !lead) return;
-    const prompt = action === 'lost' ? 'Mark this lead as lost?' : 'Reopen this lead?';
-    if (!window.confirm(prompt)) return;
-    setActionLoading(true);
-    setActionError(null);
-    setSuccess(null);
-    try {
-      const response = action === 'lost'
-        ? await markLeadLost(accessToken, lead.id)
-        : await reopenLead(accessToken, lead.id);
-      setLead(response);
-      setForm(formState(response));
-      setEditing(false);
-      setSuccess(action === 'lost' ? 'Lead marked lost.' : 'Lead reopened.');
-    } catch (requestFailure) {
-      setActionError(requestError(requestFailure, 'Could not update lead lifecycle.'));
-    } finally {
-      setActionLoading(false);
-    }
+    const preview = action === 'lost' ? previewLeadLost(lead) : previewLeadReopen(lead);
+
+    runOrPromptLeadChange({
+      preview,
+      title: action === 'lost' ? 'Mark lead as lost?' : 'Reopen lost lead?',
+      description: action === 'lost'
+        ? 'Add the required reason before moving this Lead to Lost.'
+        : 'Add the required reason before reopening this lost Lead.',
+      confirmLabel: action === 'lost' ? 'Mark lost' : 'Reopen lead',
+      run: async (context) => {
+        setActionLoading(true);
+        setActionError(null);
+        setSuccess(null);
+        const response = action === 'lost'
+          ? await markLeadLost(accessToken, lead.id, context)
+          : await reopenLead(accessToken, lead.id, context);
+        setLead(response);
+        setForm(formState(response));
+        setEditing(false);
+        setSuccess(action === 'lost' ? 'Lead marked lost.' : 'Lead reopened.');
+        setActionLoading(false);
+      },
+      onError: (requestFailure) => {
+        setActionError(requestError(requestFailure, 'Could not update lead lifecycle.'));
+        setActionLoading(false);
+      },
+    });
   }
 
-  async function updateStatus(status: 'CONTACTED' | 'QUALIFIED') {
+  function updateStatus(status: 'CONTACTED' | 'QUALIFIED') {
     if (!accessToken || !lead) return;
-    setActionLoading(true);
-    setActionError(null);
-    setSuccess(null);
-    try {
-      const response = await updateLead(accessToken, lead.id, { status, stage: status });
-      setLead(response);
-      setForm(formState(response));
-      setEditing(false);
-      setSuccess(status === 'CONTACTED' ? 'Lead marked contacted.' : 'Lead marked qualified.');
-    } catch (requestFailure) {
-      setActionError(requestError(requestFailure, 'Could not update lead status.'));
-    } finally {
-      setActionLoading(false);
-    }
+    const preview = previewLeadUpdate(lead, { status, stage: status });
+
+    runOrPromptLeadChange({
+      preview,
+      title: status === 'CONTACTED' ? 'Mark lead contacted?' : 'Mark lead qualified?',
+      description: 'Review this Lead status change before saving.',
+      run: async (context) => {
+        setActionLoading(true);
+        setActionError(null);
+        setSuccess(null);
+        const response = await updateLead(accessToken, lead.id, { status, stage: status }, context);
+        setLead(response);
+        setForm(formState(response));
+        setEditing(false);
+        setSuccess(status === 'CONTACTED' ? 'Lead marked contacted.' : 'Lead marked qualified.');
+        setActionLoading(false);
+      },
+      onError: (requestFailure) => {
+        setActionError(requestError(requestFailure, 'Could not update lead status.'));
+        setActionLoading(false);
+      },
+    });
   }
 
   async function remove() {
@@ -459,26 +570,34 @@ export function LeadDetailPage() {
     }
   }
 
-  async function convert(confirmDuplicate: boolean) {
+  function convert(confirmDuplicate: boolean) {
     if (!accessToken || !lead) return;
     if (!lead.firstName?.trim()) {
       setActionError({ status: 422, message: 'Add a first name before marking this lead won.' });
       return;
     }
-    setActionLoading(true);
-    setActionError(null);
-    setSuccess(null);
-    try {
-      const response = await convertLead(accessToken, lead.id, confirmDuplicate);
-      setLead(response.lead);
-      setForm(formState(response.lead));
-      setEditing(false);
-      setSuccess('Lead marked won.');
-    } catch (requestFailure) {
-      setActionError(requestError(requestFailure, 'Could not mark lead won.'));
-    } finally {
-      setActionLoading(false);
-    }
+
+    runOrPromptLeadChange({
+      preview: previewLeadConvert(lead),
+      title: 'Mark lead as won?',
+      description: 'Review this Lead conversion before saving.',
+      confirmLabel: 'Mark won',
+      run: async (context) => {
+        setActionLoading(true);
+        setActionError(null);
+        setSuccess(null);
+        const response = await convertLead(accessToken, lead.id, confirmDuplicate, context);
+        setLead(response.lead);
+        setForm(formState(response.lead));
+        setEditing(false);
+        setSuccess('Lead marked won.');
+        setActionLoading(false);
+      },
+      onError: (requestFailure) => {
+        setActionError(requestError(requestFailure, 'Could not mark lead won.'));
+        setActionLoading(false);
+      },
+    });
   }
 
   async function completeFollowUp() {
@@ -600,6 +719,37 @@ export function LeadDetailPage() {
           </>
         ) : null}
       </div>
+
+      <ChangeDocumentationDialog
+        open={Boolean(documentationRequest)}
+        mode={documentationRequest?.mode ?? 'optional-comment'}
+        title={documentationRequest?.title ?? ''}
+        description={documentationRequest?.description}
+        subjectLabel={documentationRequest?.subjectLabel}
+        changes={documentationRequest?.changes ?? []}
+        confirmLabel={documentationRequest?.confirmLabel}
+        submitting={documentationSubmitting}
+        error={documentationError}
+        onCancel={() => {
+          if (!documentationSubmitting) {
+            setDocumentationRequest(null);
+            setDocumentationError(null);
+          }
+        }}
+        onConfirm={async (result) => {
+          if (!documentationRequest) return;
+          setDocumentationSubmitting(true);
+          setDocumentationError(null);
+          try {
+            await documentationRequest.onConfirm(result);
+            setDocumentationRequest(null);
+          } catch (requestFailure) {
+            setDocumentationError(requestError(requestFailure, 'Could not save change documentation.').message);
+          } finally {
+            setDocumentationSubmitting(false);
+          }
+        }}
+      />
 
     </AppShell>
   );

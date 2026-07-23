@@ -55,6 +55,8 @@ function actionLabel(action: string) {
   const labels: Record<string, string> = {
     'lead.created': 'Lead created',
     'lead.updated': 'Lead updated',
+    'lead.status_changed': 'Status changed',
+    'lead.temperature_changed': 'Temperature changed',
     'lead.marked_lost': 'Lead marked lost',
     'lead.reopened': 'Lead reopened',
     'lead.converted': 'Lead marked won',

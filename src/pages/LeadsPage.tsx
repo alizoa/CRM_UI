@@ -25,11 +25,26 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import { ChangeDocumentationDialog, type ChangeDocumentationResult } from '../components/activities/ChangeDocumentationDialog';
 import { AddLeadModal } from '../components/leads/AddLeadModal';
 import { AppShell } from '../components/layout/AppShell';
 import { useAuth } from '../context/AuthContext';
 import { useLeads } from '../hooks/useLeads';
+import { buildChangeSummaryItems } from '../lib/activity-formatting';
+import { shouldRequestChangeDocumentation } from '../lib/change-documentation-settings';
 import { listLeadSourceOptions, type LeadSourceOption } from '../lib/lead-sources';
+import {
+  buildLeadMutationContext,
+  convertLead as convertLeadRequest,
+  markLeadLost as markLeadLostRequest,
+  previewLeadConvert,
+  previewLeadLost,
+  previewLeadReopen,
+  previewLeadUpdate,
+  reopenLead as reopenLeadRequest,
+  type LeadActivityPreview,
+  type LeadMutationContext,
+} from '../lib/leads';
 import type {
   CreateLeadInput,
   Lead,
@@ -120,6 +135,15 @@ const EMPTY_TEMPERATURE_STYLE = 'border-gray-200 bg-gray-50 text-gray-600';
 
 type ViewMode = 'table' | 'kanban';
 type PendingField = 'status' | 'temperature';
+type LeadDocumentationRequest = {
+  mode: 'optional-comment' | 'required-reason';
+  title: string;
+  description: string;
+  subjectLabel: string;
+  changes: ReturnType<typeof buildChangeSummaryItems>;
+  confirmLabel?: string;
+  onConfirm: (result: ChangeDocumentationResult) => Promise<void>;
+};
 
 function label(value: string) {
   return value.charAt(0) + value.slice(1).toLowerCase().replace(/_/g, ' ');
@@ -226,6 +250,9 @@ export function LeadsPage() {
   const [createFollowUpOpen, setCreateFollowUpOpen] = useState(false);
   const [pendingUpdates, setPendingUpdates] = useState<Record<string, PendingField>>({});
   const [updateErrors, setUpdateErrors] = useState<Record<string, string>>({});
+  const [documentationRequest, setDocumentationRequest] = useState<LeadDocumentationRequest | null>(null);
+  const [documentationSubmitting, setDocumentationSubmitting] = useState(false);
+  const [documentationError, setDocumentationError] = useState<string | null>(null);
 
   const actualView: ViewMode = hasTerminalStage(selectedStages) ? 'table' : viewPreference;
 
@@ -408,7 +435,7 @@ export function LeadsPage() {
   }
 
   async function handleCreate(input: CreateLeadInput) {
-    return Boolean(await createLead(input));
+    return Boolean(await createLead(input, buildLeadMutationContext(user, 'table')));
   }
 
   function openFollowUp(lead: Lead) {
@@ -433,44 +460,165 @@ export function LeadsPage() {
     return true;
   }
 
-  async function updateLeadInline(lead: Lead, input: UpdateLeadInput, field: PendingField) {
-    if (pendingUpdates[lead.id]) return false;
-    setPendingUpdates((current) => ({ ...current, [lead.id]: field }));
-    setUpdateErrors((current) => {
-      const next = { ...current };
-      delete next[lead.id];
-      return next;
-    });
+  function shouldPromptForPreview(preview: LeadActivityPreview) {
+    return preview.requiresReason || preview.documentationActions.some((action) => shouldRequestChangeDocumentation(action));
+  }
 
-    try {
-      await updateLead(lead.id, input);
-      return true;
-    } catch (requestError) {
-      const message = requestError && typeof requestError === 'object' && 'message' in requestError
-        ? String((requestError as { message?: unknown }).message)
-        : 'Could not update lead. Please try again.';
-      setUpdateErrors((current) => ({ ...current, [lead.id]: message }));
-      return false;
-    } finally {
-      setPendingUpdates((current) => {
+  function mutationErrorMessage(requestError: unknown) {
+    return requestError && typeof requestError === 'object' && 'message' in requestError
+      ? String((requestError as { message?: unknown }).message)
+      : 'Could not update lead. Please try again.';
+  }
+
+  function openDocumentationDialog(request: LeadDocumentationRequest) {
+    setDocumentationError(null);
+    setDocumentationRequest(request);
+  }
+
+  async function runDocumentedLeadChange({
+    lead,
+    preview,
+    field,
+    source,
+    title,
+    description,
+    confirmLabel,
+    mutate,
+  }: {
+    lead: Lead;
+    preview: LeadActivityPreview;
+    field: PendingField;
+    source: 'table' | 'kanban';
+    title: string;
+    description: string;
+    confirmLabel?: string;
+    mutate: (context: LeadMutationContext) => Promise<void>;
+  }) {
+    if (preview.changes.length === 0 || pendingUpdates[lead.id]) return;
+
+    const runMutation = async (result?: ChangeDocumentationResult) => {
+      setPendingUpdates((current) => ({ ...current, [lead.id]: field }));
+      setUpdateErrors((current) => {
         const next = { ...current };
         delete next[lead.id];
         return next;
       });
+
+      try {
+        await mutate(buildLeadMutationContext(user, source, result ?? undefined));
+      } catch (requestError) {
+        const message = mutationErrorMessage(requestError);
+        setUpdateErrors((current) => ({ ...current, [lead.id]: message }));
+        throw requestError;
+      } finally {
+        setPendingUpdates((current) => {
+          const next = { ...current };
+          delete next[lead.id];
+          return next;
+        });
+      }
+    };
+
+    if (!shouldPromptForPreview(preview)) {
+      try {
+        await runMutation();
+      } catch {
+        // Error state is shown inline for this lead.
+      }
+      return;
     }
+
+    openDocumentationDialog({
+      mode: preview.requiresReason ? 'required-reason' : 'optional-comment',
+      title,
+      description,
+      subjectLabel: leadName(lead),
+      changes: buildChangeSummaryItems(preview.changes),
+      confirmLabel,
+      onConfirm: runMutation,
+    });
   }
 
-  async function updateStatus(lead: Lead, nextStatus: LeadStatus) {
+  async function updateLeadInline(lead: Lead, input: UpdateLeadInput, field: PendingField, source: 'table' | 'kanban' = 'table') {
+    if (pendingUpdates[lead.id]) return false;
+    const preview = previewLeadUpdate(lead, input);
+    if (preview.changes.length === 0) return false;
+
+    await runDocumentedLeadChange({
+      lead,
+      preview,
+      field,
+      source,
+      title: field === 'temperature' ? 'Confirm temperature change' : 'Confirm status change',
+      description: 'Review this lead change before saving.',
+      mutate: async (context) => {
+        await updateLead(lead.id, input, context);
+      },
+    });
+    return true;
+  }
+
+  async function updateStatus(lead: Lead, nextStatus: LeadStatus, source: 'table' | 'kanban' = 'table') {
+    if (!accessToken) return;
     if (lead.status === nextStatus || pendingUpdates[lead.id]) return;
-    if (nextStatus === 'WON' && !window.confirm('Mark this lead as won? Won leads are read-only and will leave the active view.')) return;
-    if (nextStatus === 'LOST' && !window.confirm('Mark this lead as lost? Lost leads keep their history and can be reopened later.')) return;
-    await updateLeadInline(lead, { status: nextStatus }, 'status');
+    if (nextStatus === 'WON') {
+      await runDocumentedLeadChange({
+        lead,
+        preview: previewLeadConvert(lead),
+        field: 'status',
+        source,
+        title: 'Mark lead as won?',
+        description: 'Won leads are read-only and will leave the active view.',
+        confirmLabel: 'Mark won',
+        mutate: async (context) => {
+          await convertLeadRequest(accessToken ?? '', lead.id, false, context);
+          await refetch();
+        },
+      });
+      return;
+    }
+
+    if (nextStatus === 'LOST') {
+      await runDocumentedLeadChange({
+        lead,
+        preview: previewLeadLost(lead),
+        field: 'status',
+        source,
+        title: 'Mark lead as lost?',
+        description: 'Lost leads keep their history and can be reopened later.',
+        confirmLabel: 'Mark lost',
+        mutate: async (context) => {
+          await markLeadLostRequest(accessToken ?? '', lead.id, context);
+          await refetch();
+        },
+      });
+      return;
+    }
+
+    if (lead.status === 'LOST') {
+      await runDocumentedLeadChange({
+        lead,
+        preview: previewLeadReopen(lead),
+        field: 'status',
+        source,
+        title: 'Reopen lost lead?',
+        description: 'Reopened leads return to the active workflow.',
+        confirmLabel: 'Reopen lead',
+        mutate: async (context) => {
+          await reopenLeadRequest(accessToken ?? '', lead.id, context);
+          await refetch();
+        },
+      });
+      return;
+    }
+
+    await updateLeadInline(lead, { status: nextStatus }, 'status', source);
   }
 
   async function updateTemperature(lead: Lead, nextTemperature: LeadTemperature | '') {
     const temperature = nextTemperature || null;
     if (lead.temperature === temperature || pendingUpdates[lead.id]) return;
-    await updateLeadInline(lead, { temperature }, 'temperature');
+    await updateLeadInline(lead, { temperature }, 'temperature', 'table');
   }
 
   async function handleDragEnd(event: DragEndEvent) {
@@ -479,7 +627,7 @@ export function LeadsPage() {
     if (!nextStatus || !ACTIVE_STATUSES.includes(nextStatus)) return;
     const lead = leads.find((item) => item.id === leadId);
     if (!lead || lead.status === nextStatus) return;
-    await updateStatus(lead, nextStatus);
+    await updateStatus(lead, nextStatus, 'kanban');
   }
 
   return (
@@ -706,7 +854,7 @@ export function LeadsPage() {
                     leads={visibleLeads.filter((lead) => lead.status === column.value)}
                     pendingUpdates={pendingUpdates}
                     updateErrors={updateErrors}
-                    onStatusChange={updateStatus}
+                    onStatusChange={(lead, status) => void updateStatus(lead, status, 'kanban')}
                   />
                 ))}
               </div>
@@ -749,6 +897,37 @@ export function LeadsPage() {
           }}
         />
       ) : null}
+
+      <ChangeDocumentationDialog
+        open={Boolean(documentationRequest)}
+        mode={documentationRequest?.mode ?? 'optional-comment'}
+        title={documentationRequest?.title ?? ''}
+        description={documentationRequest?.description}
+        subjectLabel={documentationRequest?.subjectLabel}
+        changes={documentationRequest?.changes ?? []}
+        confirmLabel={documentationRequest?.confirmLabel}
+        submitting={documentationSubmitting}
+        error={documentationError}
+        onCancel={() => {
+          if (!documentationSubmitting) {
+            setDocumentationRequest(null);
+            setDocumentationError(null);
+          }
+        }}
+        onConfirm={async (result) => {
+          if (!documentationRequest) return;
+          setDocumentationSubmitting(true);
+          setDocumentationError(null);
+          try {
+            await documentationRequest.onConfirm(result);
+            setDocumentationRequest(null);
+          } catch (requestError) {
+            setDocumentationError(mutationErrorMessage(requestError));
+          } finally {
+            setDocumentationSubmitting(false);
+          }
+        }}
+      />
     </AppShell>
   );
 }
@@ -1061,7 +1240,7 @@ function StatusSelect({
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            if (window.confirm('Reopen this lost lead?')) onStatusChange(lead, 'NEW');
+            onStatusChange(lead, 'NEW');
           }}
           className="rounded-lg border border-gray-300 px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:text-gray-400"
         >

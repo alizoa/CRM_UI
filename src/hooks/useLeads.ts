@@ -6,6 +6,7 @@ import {
   type CreateLeadInput,
   type Lead,
   type LeadFilters,
+  type LeadMutationContext,
   type LeadsResponse,
   type UpdateLeadInput,
 } from '../lib/leads';
@@ -61,7 +62,7 @@ export function useLeads(token: string | null, filters: LeadFilters = {}) {
     }
   }, [includeAll, limit, ownerId, page, search, source, status, temperature, token]);
 
-  const createLead = useCallback(async (input: CreateLeadInput): Promise<Lead | null> => {
+  const createLead = useCallback(async (input: CreateLeadInput, context?: LeadMutationContext): Promise<Lead | null> => {
     if (!token) {
       setCreateError({ status: 401, message: 'You need to sign in before creating a lead.' });
       return null;
@@ -70,7 +71,7 @@ export function useLeads(token: string | null, filters: LeadFilters = {}) {
     setCreateLoading(true);
     setCreateError(null);
     try {
-      const lead = await createLeadRequest(token, input);
+      const lead = await createLeadRequest(token, input, context);
       await refetch();
       return lead;
     } catch (requestError) {
@@ -81,14 +82,14 @@ export function useLeads(token: string | null, filters: LeadFilters = {}) {
     }
   }, [refetch, token]);
 
-  const updateLead = useCallback(async (id: string, input: UpdateLeadInput): Promise<Lead | null> => {
+  const updateLead = useCallback(async (id: string, input: UpdateLeadInput, context?: LeadMutationContext): Promise<Lead | null> => {
     if (!token) {
       setCreateError({ status: 401, message: 'You need to sign in before updating a lead.' });
       return null;
     }
 
     try {
-      const updatedLead = await updateLeadRequest(token, id, input);
+      const updatedLead = await updateLeadRequest(token, id, input, context);
       setData((current) => {
         if (!current) return current;
         const shouldKeep = filters.includeAll
