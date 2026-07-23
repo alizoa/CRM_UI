@@ -8,6 +8,15 @@ export const ACTIVITY_COMMENT_MAX_LENGTH = 300;
 
 export type ActivityActorType = 'USER' | 'AUTOMATION' | 'SYSTEM';
 export type ActivityKind = 'CHANGE' | 'COMMENT';
+export type ActivityChangeSource =
+  | 'details'
+  | 'table'
+  | 'kanban'
+  | 'calendar'
+  | 'worklist'
+  | 'embedded_task_panel'
+  | 'whatsapp_context'
+  | 'system';
 
 export type ActivityChange = {
   field: string;
@@ -219,7 +228,7 @@ export function listActivities(_token: string, filters: ActivityFilters = {}): P
 export function recordActivity(input: RecordActivityInput): Activity {
   const actor = normalizeActor(input);
   const changes = input.changes ? input.changes.map(cloneChange) : null;
-  const payload = input.payload ?? (changes ? { changes } : {});
+  const payload = input.payload ?? {};
   const activity: Activity = {
     id: nextActivityId(),
     entityType: input.entityType,
