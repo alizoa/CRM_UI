@@ -18,6 +18,7 @@ import { OrdersPage } from '../pages/OrdersPage';
 import { PipelinesPage } from '../pages/PipelinesPage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { TasksPage } from '../pages/TasksPage';
+import { TaskDetailPage } from '../pages/TaskDetailPage';
 import { TeamPage } from '../pages/TeamPage';
 import { WhatsAppPage } from '../pages/WhatsAppPage';
 import { WorklistPage } from '../pages/WorklistPage';
@@ -140,6 +141,14 @@ export const router = createBrowserRouter([
         element: (
           <AuthGuard>
             <TasksPage />
+          </AuthGuard>
+        ),
+      },
+      {
+        path: 'tasks/:id',
+        element: (
+          <AuthGuard>
+            <TaskDetailPage />
           </AuthGuard>
         ),
       },

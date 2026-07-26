@@ -1,5 +1,23 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
-import { ChevronDown, ListFilter, RotateCcw, Search } from 'lucide-react';
+import {
+  Calendar,
+  CalendarClock,
+  CalendarX,
+  ChevronDown,
+  Circle,
+  CircleCheck,
+  CircleDot,
+  CirclePause,
+  CirclePlay,
+  List,
+  ListFilter,
+  Search,
+  SlidersHorizontal,
+  TriangleAlert,
+  UserCheck,
+  UserRound,
+  type LucideIcon,
+} from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/layout/AppShell';
 import { TaskCalendarView } from '../components/tasks/TaskCalendarView';
@@ -62,6 +80,7 @@ const CALENDAR_TASKS_LIMIT = 500;
 const TASK_OPTIONS_LIMIT = 100;
 const UNASSIGNED_ASSIGNEE_VALUE = '__unassigned';
 const TASK_VIEW_STORAGE_KEY = 'alozix.tasks.view';
+const TASK_FILTERS_OPEN_STORAGE_KEY = 'alozix.tasks.advanced-filters-open';
 const ACTIVE_TASK_LEAD_STATUSES = new Set(['NEW', 'CONTACTED', 'FOLLOW_UP_NEEDED', 'QUALIFIED']);
 const INITIAL_TASK_FORM: TaskFormState = {
   title: '',
@@ -129,33 +148,33 @@ const TASK_KPI_COPY: Record<TaskKpiId, { title: string; modalTitle: string; empt
   },
 };
 
-const TASK_STATUS_OPTIONS: Array<{ label: string; value: TaskStatus }> = [
-  { label: 'To do', value: 'TODO' },
-  { label: 'In progress', value: 'IN_PROGRESS' },
-  { label: 'Waiting', value: 'WAITING' },
-  { label: 'Done', value: 'DONE' },
+const TASK_STATUS_OPTIONS: Array<{ label: string; value: TaskStatus; icon: LucideIcon }> = [
+  { label: 'To do', value: 'TODO', icon: Circle },
+  { label: 'In progress', value: 'IN_PROGRESS', icon: CirclePlay },
+  { label: 'Waiting', value: 'WAITING', icon: CirclePause },
+  { label: 'Done', value: 'DONE', icon: CircleCheck },
 ];
 
-const TASK_DUE_OPTIONS: Array<{ label: string; value: TaskDueBucket }> = [
-  { label: 'Overdue', value: 'overdue' },
-  { label: 'Today', value: 'today' },
-  { label: 'Upcoming', value: 'upcoming' },
-  { label: 'No due date', value: 'no_due_date' },
+const TASK_DUE_OPTIONS: Array<{ label: string; value: TaskDueBucket; icon: LucideIcon }> = [
+  { label: 'Overdue', value: 'overdue', icon: TriangleAlert },
+  { label: 'Today', value: 'today', icon: Calendar },
+  { label: 'Upcoming', value: 'upcoming', icon: CalendarClock },
+  { label: 'No due date', value: 'no_due_date', icon: CalendarX },
 ];
 
-const TASK_COMPLETION_OPTIONS: Array<{ label: string; value: CompletionFilter }> = [
-  { label: 'Open', value: 'open' },
-  { label: 'Completed', value: 'completed' },
+const TASK_COMPLETION_OPTIONS: Array<{ label: string; value: CompletionFilter; icon: LucideIcon }> = [
+  { label: 'Open', value: 'open', icon: CircleDot },
+  { label: 'Completed', value: 'completed', icon: CircleCheck },
 ];
 
-const TASK_PRESET_OPTIONS: Array<{ label: string; value: TaskPresetId }> = [
-  { label: 'My Open Tasks', value: 'MY_OPEN' },
-  { label: 'Overdue Tasks', value: 'OVERDUE' },
-  { label: 'Due Today', value: 'TODAY' },
-  { label: 'In Progress', value: 'IN_PROGRESS' },
-  { label: 'Waiting', value: 'WAITING' },
-  { label: 'All Tasks', value: 'ALL' },
-  { label: 'Custom', value: 'CUSTOM' },
+const TASK_PRESET_OPTIONS: Array<{ label: string; value: TaskPresetId; icon: LucideIcon }> = [
+  { label: 'My Open Tasks', value: 'MY_OPEN', icon: UserCheck },
+  { label: 'Overdue Tasks', value: 'OVERDUE', icon: TriangleAlert },
+  { label: 'Due Today', value: 'TODAY', icon: Calendar },
+  { label: 'In Progress', value: 'IN_PROGRESS', icon: CirclePlay },
+  { label: 'Waiting', value: 'WAITING', icon: CirclePause },
+  { label: 'All Tasks', value: 'ALL', icon: List },
+  { label: 'Custom', value: 'CUSTOM', icon: SlidersHorizontal },
 ];
 
 function formatTaskCount(count: number) {
@@ -655,6 +674,15 @@ function arraysEqual<T extends string>(left: T[], right: T[]) {
   return left.every((item) => rightSet.has(item));
 }
 
+function storedTaskFiltersOpenPreference() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.sessionStorage.getItem(TASK_FILTERS_OPEN_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 function selectedCountLabel(count: number) {
   return count > 0 ? String(count) : 'Any';
 }
@@ -860,7 +888,7 @@ export function TasksPage() {
   const [selectedDueFilters, setSelectedDueFilters] = useState<TaskDueBucket[]>([]);
   const [selectedCompletionFilters, setSelectedCompletionFilters] = useState<CompletionFilter[]>(['open']);
   const [taskSearch, setTaskSearch] = useState('');
-  const [moreTaskFiltersOpen, setMoreTaskFiltersOpen] = useState(false);
+  const [moreTaskFiltersOpen, setMoreTaskFiltersOpen] = useState(storedTaskFiltersOpenPreference);
   const [openTaskFilterMenu, setOpenTaskFilterMenu] = useState<TaskFilterMenu | null>(null);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
     upcoming: false,
@@ -925,6 +953,14 @@ export function TasksPage() {
     selectedDueFilters,
     selectedCompletionFilters,
   );
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(TASK_FILTERS_OPEN_STORAGE_KEY, String(moreTaskFiltersOpen));
+    } catch {
+      // Ignore unavailable browser storage.
+    }
+  }, [moreTaskFiltersOpen]);
   const visibleTasks = useMemo(() => {
     return tasks.filter((task) => {
       const lead = leadsById.get(task.entityId);
@@ -1171,10 +1207,11 @@ export function TasksPage() {
   };
 
   const handleClearTaskFilters = () => {
-    setSelectedAssigneeValues([]);
-    setSelectedStatusFilters([]);
-    setSelectedDueFilters([]);
-    setSelectedCompletionFilters([]);
+    const defaults = getPresetFilters('MY_OPEN', user?.id);
+    setSelectedAssigneeValues(defaults.assigneeValues);
+    setSelectedStatusFilters(defaults.statusFilters);
+    setSelectedDueFilters(defaults.dueFilters);
+    setSelectedCompletionFilters(defaults.completionFilters);
     setTaskSearch('');
     setOpenTaskFilterMenu(null);
     setPage(1);
@@ -1350,7 +1387,10 @@ export function TasksPage() {
           moreFiltersOpen={moreTaskFiltersOpen}
           openMenu={openTaskFilterMenu}
           assigneeLabelsByValue={assigneeFilterLabelsByValue}
-          onMoreFiltersToggle={() => setMoreTaskFiltersOpen((current) => !current)}
+          onMoreFiltersToggle={() => {
+            setMoreTaskFiltersOpen((current) => !current);
+            setOpenTaskFilterMenu(null);
+          }}
           onMenuToggle={(menu) => setOpenTaskFilterMenu((current) => (current === menu ? null : menu))}
           onAssigneeToggle={toggleAssigneeFilter}
           onStatusToggle={toggleStatusFilter}
@@ -1815,11 +1855,8 @@ function TaskKpiModalRow({ task, contactsById, dealsById, leadsById, memberships
   const priorityLabel = task.taskType === 'FOLLOW_UP' ? 'Follow-up' : null;
 
   return (
-    <Link
-      to={entityPath}
-      onClick={onClose}
+    <article
       className="group block rounded border border-gray-200 bg-white px-3 py-2.5 transition hover:border-gray-300 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
-      aria-label={`${task.title}. Open related ${ENTITY_LABELS[task.entityType].toLowerCase()} ${entityLabel}.`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -1829,9 +1866,9 @@ function TaskKpiModalRow({ task, contactsById, dealsById, leadsById, memberships
             <span className={getStatusClassName(task.status)}>{STATUS_LABELS[task.status]}</span>
             {priorityLabel ? <span className="rounded bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700">{priorityLabel}</span> : null}
           </div>
-          <h3 className="mt-2 break-words text-sm font-semibold text-gray-950">{task.title}</h3>
+          <h3 className="mt-2 break-words text-sm font-semibold text-gray-950"><Link to={`/tasks/${task.id}`} onClick={onClose} className="underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">{task.title}</Link></h3>
           <p className="mt-1 break-words text-sm text-gray-700">
-            {ENTITY_LABELS[task.entityType]}: <span className="font-medium text-gray-900">{entityLabel}</span>
+            {ENTITY_LABELS[task.entityType]}: <Link to={entityPath} onClick={onClose} className="font-medium text-gray-900 underline decoration-gray-300 underline-offset-2">{entityLabel}</Link>
           </p>
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
             {task.dueAt ? <span>Due {formatDateTime(task.dueAt)}</span> : null}
@@ -1842,7 +1879,7 @@ function TaskKpiModalRow({ task, contactsById, dealsById, leadsById, memberships
           &rsaquo;
         </span>
       </div>
-    </Link>
+    </article>
   );
 }
 
@@ -1950,15 +1987,15 @@ function TaskFilterBar({
 
   return (
     <section className="overflow-visible rounded-xl border border-gray-200 bg-white shadow-sm" aria-label="Task filters">
-      <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-[minmax(280px,1fr)_minmax(220px,260px)_minmax(180px,220px)_auto] xl:items-center xl:px-6">
-        <label className="relative block">
+      <div className="grid gap-3 p-3 sm:grid-cols-2 lg:grid-cols-[minmax(18rem,1fr)_13rem_14rem_auto] lg:items-center">
+        <label className="relative block sm:col-span-2 lg:col-span-1">
           <span className="sr-only">Search tasks</span>
-          <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-500" aria-hidden="true" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" aria-hidden="true" />
           <input
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             placeholder="Search title, related lead, contact, email or phone..."
-            className="h-12 w-full rounded-lg border border-gray-300 bg-white pl-12 pr-4 text-sm font-medium text-gray-900 shadow-sm placeholder:text-gray-500 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-100"
+            className="h-11 w-full rounded-lg border border-gray-300 bg-white pl-10 pr-3 text-sm text-gray-900 shadow-sm placeholder:text-gray-500 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
           />
         </label>
 
@@ -1973,40 +2010,61 @@ function TaskFilterBar({
             <TaskFilterCheckbox
               key={option.value}
               label={option.label}
+              icon={UserRound}
               checked={selectedAssigneeValues.includes(option.value)}
               onChange={() => onAssigneeToggle(option.value)}
             />
           ))}
         </TaskFilterDropdown>
 
-        <button
-          type="button"
-          onClick={onMoreFiltersToggle}
-          className="flex h-12 w-full items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-100"
-          aria-expanded={moreFiltersOpen}
-          aria-controls="task-secondary-filters"
+        <TaskFilterDropdown
+          id="task-preset-filter"
+          title="Scope"
+          valueLabel={getTaskPresetLabel(activePreset)}
+          open={openMenu === 'preset'}
+          onToggle={() => onMenuToggle('preset')}
         >
-          <span className="flex min-w-0 items-center gap-2">
-            <ListFilter className="h-5 w-5 shrink-0 text-gray-600" aria-hidden="true" />
-            <span className="truncate">More filters</span>
-            {activeSecondaryFilterCount > 0 ? <span className="text-gray-500">&middot; {activeSecondaryFilterCount}</span> : null}
-          </span>
-          <ChevronDown className={`h-5 w-5 shrink-0 text-gray-600 transition-transform ${moreFiltersOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
-        </button>
+          {TASK_PRESET_OPTIONS.map((option) => {
+            const Icon = option.icon;
+            const selected = activePreset === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selected}
+                onClick={() => onPresetSelect(option.value)}
+                disabled={option.value === 'CUSTOM'}
+                className={`flex w-full items-center gap-2 rounded-md border px-3 py-2 text-left text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1 disabled:cursor-default ${selected ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-transparent bg-white text-gray-800 hover:bg-gray-50'}`}
+              >
+                <Icon className={`h-5 w-5 shrink-0 ${selected ? 'text-emerald-700' : 'text-gray-500'}`} aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {selected ? <CircleCheck className="h-4 w-4 shrink-0 text-emerald-700" aria-hidden="true" /> : null}
+              </button>
+            );
+          })}
+        </TaskFilterDropdown>
 
         <button
           type="button"
-          onClick={onClear}
-          className="flex h-12 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-100"
+          onClick={onMoreFiltersToggle}
+          className="flex h-11 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
+          aria-expanded={moreFiltersOpen}
+          aria-controls="task-secondary-filters"
         >
-          <RotateCcw className="h-4 w-4 text-gray-600" aria-hidden="true" />
-          Clear all
+          <ListFilter className="h-4 w-4 text-gray-600" aria-hidden="true" />
+          Filters
+          {activeSecondaryFilterCount > 0 ? (
+            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-emerald-700 px-1.5 py-0.5 text-xs font-bold text-white" aria-label={`${activeSecondaryFilterCount} active advanced filters`}>
+              {activeSecondaryFilterCount}
+            </span>
+          ) : null}
         </button>
       </div>
 
       {moreFiltersOpen ? (
-        <div id="task-secondary-filters" className="border-t border-gray-200 p-4 sm:px-6">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div id="task-secondary-filters" className="border-t border-gray-200 bg-gray-50/60 p-3 sm:px-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <TaskFilterDropdown
               id="task-status-filter"
               title="Status"
@@ -2018,6 +2076,7 @@ function TaskFilterBar({
                 <TaskFilterCheckbox
                   key={option.value}
                   label={option.label}
+                  icon={option.icon}
                   checked={selectedStatusFilters.includes(option.value)}
                   onChange={() => onStatusToggle(option.value)}
                 />
@@ -2035,6 +2094,7 @@ function TaskFilterBar({
                 <TaskFilterCheckbox
                   key={option.value}
                   label={option.label}
+                  icon={option.icon}
                   checked={selectedDueFilters.includes(option.value)}
                   onChange={() => onDueToggle(option.value)}
                 />
@@ -2052,44 +2112,20 @@ function TaskFilterBar({
                 <TaskFilterCheckbox
                   key={option.value}
                   label={option.label}
+                  icon={option.icon}
                   checked={selectedCompletionFilters.includes(option.value)}
                   onChange={() => onCompletionToggle(option.value)}
                 />
               ))}
             </TaskFilterDropdown>
 
-            <TaskFilterDropdown
-              id="task-preset-filter"
-              title="Preset"
-              valueLabel={getTaskPresetLabel(activePreset)}
-              open={openMenu === 'preset'}
-              onToggle={() => onMenuToggle('preset')}
-            >
-              {TASK_PRESET_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => onPresetSelect(option.value)}
-                  disabled={option.value === 'CUSTOM'}
-                  className={[
-                    'flex w-full items-center justify-between rounded px-3 py-2 text-left text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-1 disabled:cursor-default disabled:opacity-70',
-                    activePreset === option.value ? 'bg-gray-900 text-white' : 'text-gray-800 hover:bg-gray-50',
-                  ].join(' ')}
-                >
-                  {option.label}
-                  {activePreset === option.value ? <span aria-hidden="true">&check;</span> : null}
-                </button>
-              ))}
-            </TaskFilterDropdown>
           </div>
         </div>
       ) : null}
 
       {hasSelections ? (
-        <div className="border-t border-gray-200 px-4 py-4 sm:px-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-            <p className="shrink-0 text-sm font-semibold text-gray-900">Selected filters</p>
-            <div className="flex flex-wrap items-center gap-2">
+        <div className="border-t border-gray-100 px-3 py-2 sm:px-4">
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
               {selectedAssigneeValues.map((value) => (
                 <TaskSelectedFilterChip key={value} label={assigneeLabelsByValue.get(value) ?? 'Selected assignee'} onRemove={() => onRemoveFilter('assignee', value)} />
               ))}
@@ -2105,12 +2141,11 @@ function TaskFilterBar({
               <button
                 type="button"
                 onClick={onClear}
-                className="h-9 rounded-lg px-3 text-sm font-semibold text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-1"
+                className="h-8 shrink-0 rounded-lg px-3 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
               >
-                Clear all
+                Reset filters
               </button>
             </div>
-          </div>
         </div>
       ) : null}
     </section>
@@ -2142,7 +2177,7 @@ function TaskFilterDropdown({
       <button
         type="button"
         onClick={onToggle}
-        className="flex h-12 w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-100"
+        className="flex h-11 w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
         aria-expanded={open}
         aria-controls={`${id}-menu`}
         aria-haspopup="menu"
@@ -2161,16 +2196,22 @@ function TaskFilterDropdown({
   );
 }
 
-function TaskFilterCheckbox({ label, checked, onChange }: { label: string; checked: boolean; onChange: () => void }) {
+function TaskFilterCheckbox({ label, icon: Icon, checked, onChange }: { label: string; icon: LucideIcon; checked: boolean; onChange: () => void }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50">
+    <label
+      role="menuitemcheckbox"
+      aria-checked={checked}
+      className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold transition focus-within:ring-2 focus-within:ring-emerald-500 focus-within:ring-offset-1 ${checked ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-transparent bg-white text-gray-800 hover:bg-gray-50'}`}
+    >
       <input
         type="checkbox"
         checked={checked}
         onChange={onChange}
-        className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500"
+        className="sr-only"
       />
-      <span>{label}</span>
+      <Icon className={`h-5 w-5 shrink-0 ${checked ? 'text-emerald-700' : 'text-gray-500'}`} aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {checked ? <CircleCheck className="h-4 w-4 shrink-0 text-emerald-700" aria-hidden="true" /> : null}
     </label>
   );
 }
@@ -2178,17 +2219,17 @@ function TaskFilterCheckbox({ label, checked, onChange }: { label: string; check
 function selectedPillClass(tone: 'neutral' | 'danger' | 'warm' = 'neutral') {
   if (tone === 'danger') return 'bg-red-50 text-red-700';
   if (tone === 'warm') return 'bg-amber-50 text-amber-800';
-  return 'bg-gray-100 text-gray-800';
+  return 'bg-emerald-50 text-emerald-800';
 }
 
 function TaskSelectedFilterChip({ label, tone = 'neutral', onRemove }: { label: string; tone?: 'neutral' | 'danger' | 'warm'; onRemove: () => void }) {
   return (
-    <span className={`inline-flex h-9 items-center gap-2 rounded-full px-3 text-sm font-semibold ${selectedPillClass(tone)}`}>
+    <span className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-lg px-3 text-xs font-semibold ${selectedPillClass(tone)}`}>
       {label}
       <button
         type="button"
         onClick={onRemove}
-        className="rounded-full p-0.5 text-current hover:bg-white/70 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-1"
+        className="rounded-full p-0.5 text-current hover:bg-white/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
         aria-label={`Remove ${label} filter`}
       >
         x
@@ -2341,7 +2382,7 @@ function TaskTableRow({
   return (
     <tr className={completed ? 'bg-gray-50 text-gray-600' : 'text-gray-900'}>
       <td className="max-w-xs px-4 py-3 align-top">
-        <p className={completed ? 'font-medium text-gray-600' : 'font-medium text-gray-900'}>{task.title}</p>
+        <Link to={`/tasks/${task.id}`} className={`${completed ? 'text-gray-600' : 'text-gray-900'} font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500`}>{task.title}</Link>
       </td>
       <td className="max-w-xs px-4 py-3 align-top">
         <Link className="break-words font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-700" to={entityPath}>
@@ -2404,7 +2445,7 @@ function TaskTableMobileCard({
           <span className={getEntityClassName(task.entityType)}>Lead</span>
           <InlineTaskStatusControl task={task} accessToken={accessToken} onChanged={onChanged} />
         </div>
-        <h3 className={completed ? 'text-base font-semibold text-gray-600' : 'text-base font-semibold text-gray-900'}>{task.title}</h3>
+        <h3 className={completed ? 'text-base font-semibold text-gray-600' : 'text-base font-semibold text-gray-900'}><Link to={`/tasks/${task.id}`} className="underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">{task.title}</Link></h3>
         <Link className="break-words text-sm font-medium underline decoration-gray-300 underline-offset-2 hover:text-gray-700" to={entityPath}>
           {entityLabel}
         </Link>
@@ -2912,7 +2953,7 @@ function TaskCard({ task, contactsById, dealsById, leadsById, membershipsByUserI
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="space-y-2">
-            <h3 className={titleClassName}>{task.title}</h3>
+            <h3 className={titleClassName}><Link to={`/tasks/${task.id}`} className="underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">{task.title}</Link></h3>
             <div className="flex flex-wrap items-center gap-2">
               <span className={entityClassName}>Lead</span>
               <Link className={completed ? 'break-words text-sm text-gray-600 underline decoration-gray-300 underline-offset-2 hover:text-gray-700' : 'break-words text-sm font-medium text-gray-800 underline decoration-gray-300 underline-offset-2 hover:text-gray-700'} to={entityPath}>

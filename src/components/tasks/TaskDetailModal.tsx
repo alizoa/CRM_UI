@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
+import { ActivityCommentTimeline } from '../leads/ActivityCommentTimeline';
+import { TaskProgress } from './TaskProgress';
+import { useTaskActivities } from './useTaskActivities';
 import { ChangeDocumentationDialog, type ChangeDocumentationResult } from '../activities/ChangeDocumentationDialog';
 import { useAuth } from '../../context/AuthContext';
 import { buildChangeSummaryItems } from '../../lib/activity-formatting';
@@ -164,6 +167,8 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, mu
   const [documentationRequest, setDocumentationRequest] = useState<TaskDocumentationRequest | null>(null);
   const [documentationSubmitting, setDocumentationSubmitting] = useState(false);
   const [documentationError, setDocumentationError] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<'ACTIVITY' | 'NOTES'>('ACTIVITY');
+  const { activities, loading: activitiesLoading, error: activitiesError, refresh: refreshActivities } = useTaskActivities(task.id);
   const membershipsByUserId = useMemo(() => new Map(memberships.map((membership) => [membership.userId, membership])), [memberships]);
   const comments = commentsData?.data ?? [];
   const totalComments = commentsData?.total ?? comments.length;
@@ -219,7 +224,7 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, mu
     setSaveSuccess(null);
     setCommentBody('');
     setCommentError(null);
-  }, [task.id]);
+  }, [task]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -255,7 +260,7 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, mu
         }
 
         setCommentsData(null);
-        setCommentsError(toRequestError(error, 'Could not load task comments.'));
+        setCommentsError(toRequestError(error, 'Could not load task notes.'));
       } finally {
         if (active) {
           setCommentsLoading(false);
@@ -321,12 +326,12 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, mu
     event.preventDefault();
 
     if (!accessToken) {
-      setCommentError({ status: 401, message: 'You need to sign in before adding comments.' });
+      setCommentError({ status: 401, message: 'You need to sign in before adding notes.' });
       return;
     }
 
     if (!commentBody.trim()) {
-      setCommentError({ status: 422, message: 'Comment is required.' });
+      setCommentError({ status: 422, message: 'Note is required.' });
       return;
     }
 
@@ -342,10 +347,10 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, mu
       setCommentBody('');
       setCommentRefreshKey((current) => current + 1);
     } catch (error) {
-      const requestError = toRequestError(error, 'Could not add comment.');
+      const requestError = toRequestError(error, 'Could not add note.');
       setCommentError({
         status: requestError.status,
-        message: requestError.status === 403 ? 'You do not have permission to add comments.' : requestError.message,
+        message: requestError.status === 403 ? 'You do not have permission to add notes.' : requestError.message,
       });
     } finally {
       setCommentLoading(false);
@@ -403,13 +408,38 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, mu
               </Link>
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
-          >
-            Close
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to={`/tasks/${task.id}`}
+              onClick={onClose}
+              className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+            >
+              Open full page
+            </Link>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+        <div className="border-b border-gray-200 px-5 py-4">
+          <TaskProgress
+            task={{
+              ...task,
+              status: form.status,
+              waitingFromStatus: form.status === 'WAITING'
+                ? task.status === 'WAITING'
+                  ? task.waitingFromStatus
+                  : task.status === 'TODO'
+                    ? 'TODO'
+                    : 'IN_PROGRESS'
+                : null,
+            }}
+            activities={task.status === 'WAITING' ? activities : []}
+          />
         </div>
 
         <div className="grid gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_minmax(320px,400px)]">
@@ -537,15 +567,54 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, mu
             </div>
           </form>
 
-          <section className="rounded border border-gray-200 bg-gray-50 p-4">
+          <div className="min-w-0">
+            <div className="mb-3 flex border-b border-gray-200" role="tablist" aria-label="Task details">
+              {([
+                ['ACTIVITY', 'Activity & Comments'],
+                ['NOTES', 'Notes'],
+              ] as const).map(([value, label], index, tabs) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={detailTab === value}
+                  tabIndex={detailTab === value ? 0 : -1}
+                  onClick={() => setDetailTab(value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                    event.preventDefault();
+                    const nextIndex = event.key === 'ArrowRight' ? (index + 1) % tabs.length : (index - 1 + tabs.length) % tabs.length;
+                    setDetailTab(tabs[nextIndex][0]);
+                    (event.currentTarget.parentElement?.children[nextIndex] as HTMLButtonElement | undefined)?.focus();
+                  }}
+                  className={`border-b-2 px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-gray-500 focus:ring-inset ${detailTab === value ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {detailTab === 'ACTIVITY' ? (
+              <ActivityCommentTimeline
+                entityType="TASK"
+                entityId={task.id}
+                relatedTaskId={task.id}
+                subtitle="Change history and event-specific comments for this task."
+                activities={activities}
+                loading={activitiesLoading}
+                error={activitiesError}
+                tasks={[task]}
+                onRefresh={refreshActivities}
+              />
+            ) : (
+          <section className="rounded border border-gray-200 bg-gray-50 p-4" role="tabpanel">
             <div>
-              <h3 className="text-base font-semibold text-gray-900">Comments</h3>
-              <p className="mt-1 text-sm text-gray-600">{totalComments === 1 ? '1 comment' : `${totalComments} comments`}</p>
+              <h3 className="text-base font-semibold text-gray-900">Notes</h3>
+              <p className="mt-1 text-sm text-gray-600">{totalComments === 1 ? '1 note' : `${totalComments} notes`}</p>
             </div>
 
             <form className="mt-4" onSubmit={handleCreateComment}>
               <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                Add comment
+                Note
                 <textarea
                   value={commentBody}
                   onChange={(event) => {
@@ -562,11 +631,11 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, mu
                 disabled={commentLoading}
                 className="mt-3 rounded bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-gray-400"
               >
-                {commentLoading ? 'Adding...' : 'Add comment'}
+                {commentLoading ? 'Adding...' : 'Add note'}
               </button>
             </form>
 
-            {commentsLoading ? <p className="mt-5 rounded border border-gray-200 bg-white p-4 text-sm text-gray-700">Loading comments...</p> : null}
+            {commentsLoading ? <p className="mt-5 rounded border border-gray-200 bg-white p-4 text-sm text-gray-700">Loading notes...</p> : null}
             {!commentsLoading && commentsError ? (
               <div className="mt-5 rounded border border-red-200 bg-red-50 p-4">
                 <p className="text-sm text-red-700">{commentsError.message}</p>
@@ -580,17 +649,19 @@ export function TaskDetailModal({ task, memberships, entityLabel, entityPath, mu
               </div>
             ) : null}
             {!commentsLoading && !commentsError && comments.length === 0 ? (
-              <p className="mt-5 rounded border border-gray-200 bg-white p-4 text-sm text-gray-600">No comments yet.</p>
+              <p className="mt-5 rounded border border-gray-200 bg-white p-4 text-sm text-gray-600">No notes yet.</p>
             ) : null}
             {!commentsLoading && !commentsError && comments.length > 0 ? (
               <div className="mt-5 space-y-3">
                 {comments.map((comment) => (
                   <CommentCard key={comment.id} comment={comment} authorLabel={getAuthorLabel(comment.authorId, membershipsByUserId)} />
                 ))}
-                {totalComments > comments.length ? <p className="text-sm text-gray-600">Showing {comments.length} of {totalComments} comments.</p> : null}
+                {totalComments > comments.length ? <p className="text-sm text-gray-600">Showing {comments.length} of {totalComments} notes.</p> : null}
               </div>
             ) : null}
           </section>
+            )}
+          </div>
         </div>
       </div>
       <ChangeDocumentationDialog

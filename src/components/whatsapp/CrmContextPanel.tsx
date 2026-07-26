@@ -781,9 +781,9 @@ export function CrmContextPanel({
                     return (
                       <div key={task.id} className="flex min-w-0 flex-wrap items-start gap-2">
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-gray-900" title={task.title}>
+                          <Link to={`/tasks/${task.id}`} className="block truncate text-sm font-medium text-gray-900 underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500" title={task.title}>
                             {task.title}
-                          </p>
+                          </Link>
                           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
                             <span className={task.isOverdue ? 'font-semibold text-red-700' : undefined}>
                               {dueLabel ?? 'No due date'}

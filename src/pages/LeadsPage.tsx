@@ -13,7 +13,6 @@ import {
   ListFilter,
   Phone,
   Plus,
-  RotateCcw,
   Search,
   SlidersHorizontal,
   Snowflake,
@@ -67,6 +66,7 @@ import { TaskDetailModal } from '../components/tasks/TaskDetailModal';
 
 const PAGE_LIMIT = 20;
 const VIEW_PREFERENCE_KEY = 'alozix.leads.view';
+const ADVANCED_FILTERS_PREFERENCE_KEY = 'alozix.leads.advanced-filters-open';
 const ACTIVE_STATUSES: LeadStatus[] = ['NEW', 'CONTACTED', 'FOLLOW_UP_NEEDED', 'QUALIFIED'];
 const TERMINAL_STATUSES: LeadStatus[] = ['WON', 'LOST'];
 const ACTIVE_STAGE_FILTERS: LeadStage[] = ['NEW', 'CONTACTED', 'QUALIFIED'];
@@ -225,6 +225,15 @@ function storedViewPreference(): ViewMode {
   return window.localStorage.getItem(VIEW_PREFERENCE_KEY) === 'kanban' ? 'kanban' : 'table';
 }
 
+function storedAdvancedFiltersPreference() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.sessionStorage.getItem(ADVANCED_FILTERS_PREFERENCE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 function isInteractiveTarget(target: EventTarget | null) {
   return target instanceof HTMLElement && Boolean(target.closest('a, button, input, label, select, textarea'));
 }
@@ -232,13 +241,12 @@ function isInteractiveTarget(target: EventTarget | null) {
 export function LeadsPage() {
   const { accessToken, user } = useAuth();
   const [modalOpen, setModalOpen] = useState(false);
-  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(storedAdvancedFiltersPreference);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [selectedStages, setSelectedStages] = useState<LeadStage[]>(ACTIVE_STAGE_FILTERS);
   const [followUpFilter, setFollowUpFilter] = useState<FollowUpFilter>('ANY');
   const [selectedTemperatures, setSelectedTemperatures] = useState<LeadTemperature[]>([]);
-  const [activePreset, setActivePreset] = useState<QuickPreset>('ACTIVE');
   const [openFilterMenu, setOpenFilterMenu] = useState<'stage' | 'followUp' | 'temperature' | 'preset' | null>(null);
   const [ownerId, setOwnerId] = useState('');
   const [page, setPage] = useState(1);
@@ -340,12 +348,34 @@ export function LeadsPage() {
     || followUpFilter !== 'ANY'
     || selectedTemperatures.length > 0
     || !arraysEqual(selectedStages, ACTIVE_STAGE_FILTERS);
-  const activePresetLabel = filterLabel(QUICK_PRESETS, activePreset);
+  const presetOwnerId = user?.id ?? memberships[0]?.userId ?? '';
+  const resolvedPreset: QuickPreset = arraysEqual(selectedStages, ACTIVE_STAGE_FILTERS) && selectedTemperatures.length === 0
+    ? followUpFilter === 'NO_FOLLOW_UP'
+      ? 'NO_FOLLOW_UP'
+      : followUpFilter === 'OVERDUE'
+        ? 'OVERDUE'
+        : followUpFilter === 'ANY' && !ownerId
+          ? 'ACTIVE'
+          : followUpFilter === 'ANY' && Boolean(presetOwnerId) && ownerId === presetOwnerId
+            ? 'MY'
+            : 'CUSTOM'
+    : 'CUSTOM';
+  const activePresetLabel = filterLabel(QUICK_PRESETS, resolvedPreset);
+  const advancedFilterCount = selectedStages.length
+    + (followUpFilter === 'ANY' ? 0 : 1)
+    + selectedTemperatures.length;
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(ADVANCED_FILTERS_PREFERENCE_KEY, String(moreFiltersOpen));
+    } catch {
+      // Ignore unavailable browser storage.
+    }
+  }, [moreFiltersOpen]);
 
   function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSearch(searchInput.trim());
-    setActivePreset('CUSTOM');
     setPage(1);
   }
 
@@ -355,13 +385,11 @@ export function LeadsPage() {
     setSelectedStages(ACTIVE_STAGE_FILTERS);
     setFollowUpFilter('ANY');
     setSelectedTemperatures([]);
-    setActivePreset('ACTIVE');
     setOwnerId('');
     setPage(1);
   }
 
   function markCustom() {
-    setActivePreset('CUSTOM');
     setPage(1);
   }
 
@@ -382,7 +410,6 @@ export function LeadsPage() {
   }
 
   function applyPreset(preset: QuickPreset) {
-    setActivePreset(preset);
     setOpenFilterMenu(null);
     setPage(1);
 
@@ -646,66 +673,75 @@ export function LeadsPage() {
         </header>
 
         <section className="overflow-visible rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="grid gap-4 border-b border-gray-200 p-4 lg:grid-cols-[minmax(0,1fr)_16rem_16rem_auto]">
-            <form onSubmit={handleSearch}>
+          <div className="grid gap-3 p-3 sm:grid-cols-2 lg:grid-cols-[minmax(18rem,1fr)_13rem_14rem_auto] lg:items-center">
+            <form onSubmit={handleSearch} className="sm:col-span-2 lg:col-span-1">
               <label className="relative block">
-                <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-500">
-                  <Search className="h-5 w-5" aria-hidden="true" />
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+                  <Search className="h-4 w-4" aria-hidden="true" />
                 </span>
                 <input
                   value={searchInput}
                   onChange={(event) => setSearchInput(event.target.value)}
                   placeholder="Search leads..."
-                  className="h-14 w-full rounded-lg border border-gray-300 bg-white pl-12 pr-4 text-base text-gray-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                  className="h-11 w-full rounded-lg border border-gray-300 bg-white pl-10 pr-3 text-sm text-gray-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
                 />
               </label>
             </form>
             <label className="relative block">
-              <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-600">
-                <UserRound className="h-5 w-5" aria-hidden="true" />
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-600">
+                <UserRound className="h-4 w-4" aria-hidden="true" />
               </span>
               <select
                 value={ownerId}
                 onChange={(event) => { setOwnerId(event.target.value); markCustom(); }}
-                className="h-14 w-full appearance-none rounded-lg border border-gray-300 bg-white pl-12 pr-10 text-base font-semibold text-gray-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                className="h-11 w-full appearance-none rounded-lg border border-gray-300 bg-white pl-10 pr-9 text-sm font-semibold text-gray-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
               >
                 <option value="">Owner</option>
                 {memberships.map((membership) => <option key={membership.id} value={membership.userId}>{membershipName(membership)}</option>)}
               </select>
-              <span className="pointer-events-none absolute right-4 top-1/2 h-2 w-2 -translate-y-1/2 rotate-45 border-b border-r border-gray-700" />
+              <span className="pointer-events-none absolute right-3 top-1/2 h-2 w-2 -translate-y-1/2 rotate-45 border-b border-r border-gray-700" />
             </label>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setMoreFiltersOpen((current) => !current)}
-                className="flex h-14 w-full items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-4 text-base font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-                aria-expanded={moreFiltersOpen}
-              >
-                <span className="flex items-center gap-3">
-                  <ListFilter className="h-5 w-5 text-gray-600" aria-hidden="true" />
-                  More filters
+            <FilterDropdown
+              id="lead-preset-filter"
+              title="Scope"
+              valueLabel={activePresetLabel}
+              open={openFilterMenu === 'preset'}
+              onToggle={() => setOpenFilterMenu((current) => current === 'preset' ? null : 'preset')}
+            >
+              {QUICK_PRESETS.map((preset) => (
+                <FilterOptionButton
+                  key={preset.value}
+                  label={preset.label}
+                  icon={preset.icon}
+                  selected={resolvedPreset === preset.value}
+                  className={resolvedPreset === preset.value ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-transparent bg-white text-gray-800 hover:bg-gray-50'}
+                  onClick={() => applyPreset(preset.value)}
+                />
+              ))}
+            </FilterDropdown>
+            <button
+              type="button"
+              onClick={() => {
+                setMoreFiltersOpen((current) => !current);
+                setOpenFilterMenu(null);
+              }}
+              className="flex h-11 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
+              aria-expanded={moreFiltersOpen}
+              aria-controls="lead-advanced-filters"
+            >
+              <ListFilter className="h-4 w-4 text-gray-600" aria-hidden="true" />
+              Filters
+              {advancedFilterCount > 0 ? (
+                <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-emerald-700 px-1.5 py-0.5 text-xs font-bold text-white" aria-label={`${advancedFilterCount} active advanced filters`}>
+                  {advancedFilterCount}
                 </span>
-                <span className="h-2 w-2 rotate-45 border-b border-r border-gray-700" />
-              </button>
-              {moreFiltersOpen ? (
-                <div className="absolute left-0 top-full z-20 mt-2 w-72 rounded-lg border border-gray-200 bg-white p-3 shadow-lg">
-                  {['Source', 'Created Date', 'Updated Date', 'Assigned', 'Unassigned'].map((item) => (
-                    <button key={item} type="button" className="block w-full rounded px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-50">
-                      {item}
-                    </button>
-                  ))}
-                  <p className="px-3 pt-2 text-xs text-gray-500">Prepared for future frontend filters.</p>
-                </div>
               ) : null}
-            </div>
-            <button type="button" onClick={resetFilters} className="flex h-14 items-center justify-center gap-3 rounded-lg border border-gray-300 bg-white px-5 text-base font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-100">
-              <RotateCcw className="h-5 w-5 text-gray-600" aria-hidden="true" />
-              Clear all
             </button>
           </div>
 
-          <div className="border-b border-gray-200 p-4 sm:px-6">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {moreFiltersOpen ? (
+          <div id="lead-advanced-filters" className="border-t border-gray-200 bg-gray-50/60 p-3 sm:px-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               <FilterDropdown
                 id="lead-stage-filter"
                 title="Stage"
@@ -763,26 +799,9 @@ export function LeadsPage() {
                 ))}
               </FilterDropdown>
 
-              <FilterDropdown
-                id="lead-preset-filter"
-                title="Preset"
-                valueLabel={activePresetLabel}
-                open={openFilterMenu === 'preset'}
-                onToggle={() => setOpenFilterMenu((current) => current === 'preset' ? null : 'preset')}
-              >
-                {QUICK_PRESETS.map((preset) => (
-                  <FilterOptionButton
-                    key={preset.value}
-                    label={preset.label}
-                    icon={preset.icon}
-                    selected={activePreset === preset.value}
-                    className={activePreset === preset.value ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-transparent bg-white text-gray-800 hover:bg-gray-50'}
-                    onClick={() => applyPreset(preset.value)}
-                  />
-                ))}
-              </FilterDropdown>
             </div>
           </div>
+          ) : null}
 
           <SelectedFilters
             selectedStages={selectedStages}
@@ -1048,7 +1067,7 @@ function FilterDropdown({
       <button
         type="button"
         onClick={onToggle}
-        className="flex h-12 w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
+        className="flex h-11 w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
         aria-expanded={open}
         aria-controls={`${id}-menu`}
         aria-haspopup="menu"
@@ -1102,20 +1121,22 @@ function FilterOptionButton({
 function SelectedFilterChip({
   children,
   tone = 'neutral',
+  removeLabel,
   onRemove,
 }: {
   children: ReactNode;
   tone?: 'neutral' | 'danger' | 'warm';
+  removeLabel: string;
   onRemove: () => void;
 }) {
   return (
-    <span className={`inline-flex h-10 items-center gap-2 rounded-lg px-4 text-sm font-semibold ${selectedPillClass(tone)}`}>
+    <span className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-lg px-3 text-xs font-semibold ${selectedPillClass(tone)}`}>
       {children}
       <button
         type="button"
         onClick={onRemove}
         className="rounded-full p-0.5 text-current hover:bg-white/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
-        aria-label={`Remove ${String(children)} filter`}
+        aria-label={removeLabel}
       >
         x
       </button>
@@ -1151,17 +1172,17 @@ function SelectedFilters({
   if (!hasSelections) return null;
 
   return (
-    <div className="border-t border-gray-200 px-6 py-5">
-      <h2 className="text-base font-semibold text-gray-900">Selected filters</h2>
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+    <div className="border-t border-gray-100 px-3 py-2 sm:px-4">
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
         {selectedStages.map((stage) => (
-          <SelectedFilterChip key={stage} onRemove={() => onRemove('stage', stage)}>
+          <SelectedFilterChip key={stage} removeLabel={`Remove ${filterLabel(STAGE_FILTER_OPTIONS, stage)} stage filter`} onRemove={() => onRemove('stage', stage)}>
             {filterLabel(STAGE_FILTER_OPTIONS, stage)}
           </SelectedFilterChip>
         ))}
         {followUpFilter !== 'ANY' ? (
           <SelectedFilterChip
             tone={followUpFilter === 'OVERDUE' ? 'danger' : 'warm'}
+            removeLabel={`Remove ${filterLabel(FOLLOW_UP_FILTER_OPTIONS, followUpFilter)} follow-up filter`}
             onRemove={() => onRemove('followUp')}
           >
             {filterLabel(FOLLOW_UP_FILTER_OPTIONS, followUpFilter)}
@@ -1171,27 +1192,28 @@ function SelectedFilters({
           <SelectedFilterChip
             key={temperature}
             tone={temperature === 'HOT' ? 'danger' : temperature === 'WARM' ? 'warm' : 'neutral'}
+            removeLabel={`Remove ${filterLabel(TEMPERATURE_FILTER_OPTIONS, temperature)} temperature filter`}
             onRemove={() => onRemove('temperature', temperature)}
           >
             {filterLabel(TEMPERATURE_FILTER_OPTIONS, temperature)}
           </SelectedFilterChip>
         ))}
         {ownerId ? (
-          <SelectedFilterChip onRemove={() => onRemove('owner')}>
+          <SelectedFilterChip removeLabel={`Remove ${ownerLabel || 'selected'} owner filter`} onRemove={() => onRemove('owner')}>
             Owner: {ownerLabel || 'Selected owner'}
           </SelectedFilterChip>
         ) : null}
         {search ? (
-          <SelectedFilterChip onRemove={() => onRemove('search')}>
+          <SelectedFilterChip removeLabel={`Remove search filter ${search}`} onRemove={() => onRemove('search')}>
             Search: {search}
           </SelectedFilterChip>
         ) : null}
         <button
           type="button"
           onClick={onClear}
-          className="h-10 rounded-lg px-3 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
+          className="h-8 shrink-0 rounded-lg px-3 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
         >
-          Clear all
+          Reset filters
         </button>
       </div>
     </div>

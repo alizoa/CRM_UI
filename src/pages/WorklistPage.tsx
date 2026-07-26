@@ -825,7 +825,7 @@ function TaskRow({
       <div className="grid gap-3 xl:grid-cols-[minmax(240px,1.2fr)_auto_minmax(220px,0.9fr)_auto] xl:items-center">
         <div className="flex min-w-0 items-center gap-3">
           <span className={`h-5 w-5 shrink-0 rounded-full ${metaTone === 'overdue' ? 'bg-red-600' : metaTone === 'today' ? 'bg-blue-600' : 'bg-gray-400'}`} aria-hidden="true" />
-          <h3 className={`min-w-0 break-words text-base font-semibold ${completed ? 'text-gray-600' : 'text-gray-950'}`}>{item.task.title}</h3>
+          <h3 className={`min-w-0 break-words text-base font-semibold ${completed ? 'text-gray-600' : 'text-gray-950'}`}><Link to={`/tasks/${item.task.id}`} className="underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">{item.task.title}</Link></h3>
           <span className="shrink-0 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700">Lead</span>
         </div>
         <span className={`w-fit rounded border px-3 py-1 text-sm font-medium ${metaClass}`}>{metaLabel}</span>

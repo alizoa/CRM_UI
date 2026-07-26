@@ -723,10 +723,13 @@ function CalendarTaskCard({ task, contactsById, dealsById, leadsById, membership
       >
         <span className={['mt-1 h-2 w-2 shrink-0 rounded-full', getStatusDotClassName(task.status)].join(' ')} />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-semibold">{task.title}</span>
+          <span className="block truncate text-xs font-semibold">Drag task</span>
           {dueTime ? <span className="mt-0.5 block text-[11px] text-gray-600">{dueTime}</span> : null}
         </span>
       </button>
+      <Link to={`/tasks/${task.id}`} className="mt-1 block truncate text-xs font-semibold underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">
+        {task.title}
+      </Link>
       <div className="mt-1 flex flex-wrap items-center gap-1.5">
         <span className={getEntityClassName(task.entityType)}>{ENTITY_LABELS[task.entityType]}</span>
         <button
@@ -818,7 +821,7 @@ function MobileCalendarTask({ task, contactsById, dealsById, leadsById, membersh
         <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-700">{STATUS_LABELS[task.status]}</span>
         {dueTime ? <span className="text-xs text-gray-600">{dueTime}</span> : null}
       </div>
-      <h4 className="mt-2 text-sm font-semibold text-gray-900">{task.title}</h4>
+      <h4 className="mt-2 text-sm font-semibold text-gray-900"><Link to={`/tasks/${task.id}`} className="underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">{task.title}</Link></h4>
       <Link
         className="mt-1 block break-words text-sm font-medium text-gray-800 underline decoration-gray-300 underline-offset-2 hover:text-gray-700"
         to={entityPath}

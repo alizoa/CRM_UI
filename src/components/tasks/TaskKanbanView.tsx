@@ -513,8 +513,9 @@ function TaskKanbanCard({
         {...listeners}
         {...attributes}
       >
-        <h3 className="text-sm font-semibold text-gray-900">{task.title}</h3>
+        <span className="text-xs font-medium text-gray-500">Drag task</span>
       </button>
+      <h3 className="mt-2 text-sm font-semibold text-gray-900"><Link to={`/tasks/${task.id}`} className="underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">{task.title}</Link></h3>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <span className={getEntityClassName(task.entityType)}>Lead</span>
         <Link className="break-words text-sm font-medium text-gray-800 underline decoration-gray-300 underline-offset-2 hover:text-gray-700" to={entityPath}>

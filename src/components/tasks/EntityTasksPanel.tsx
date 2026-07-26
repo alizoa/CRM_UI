@@ -588,7 +588,7 @@ function EmbeddedTaskCard({ task, accessToken, membershipsByUserId, onChanged, o
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold text-gray-900">{task.title}</h3>
+            <h3 className="text-sm font-semibold text-gray-900"><Link to={`/tasks/${task.id}`} className="underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">{task.title}</Link></h3>
             <span className={getStatusClassName(task.status)}>{STATUS_LABELS[task.status]}</span>
           </div>
           {task.description ? <p className="mt-2 whitespace-pre-wrap text-sm text-gray-700">{task.description}</p> : null}

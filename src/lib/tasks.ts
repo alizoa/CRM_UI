@@ -19,6 +19,7 @@ export type Task = {
   description: string | null;
   dueAt: string | null;
   status: TaskStatus;
+  waitingFromStatus: 'TODO' | 'IN_PROGRESS' | null;
   completedAt: string | null;
   assigneeId: string | null;
   createdAt: string;
@@ -116,7 +117,14 @@ type TaskUpdateOptions = {
   allowCompletionTransition?: boolean;
 };
 
-let demoTasks = DEMO_TASKS.map((task) => ({ ...task })) as Task[];
+function normalizeTask(task: Omit<Task, 'waitingFromStatus'> & Partial<Pick<Task, 'waitingFromStatus'>>): Task {
+  return {
+    ...task,
+    waitingFromStatus: task.status === 'WAITING' ? task.waitingFromStatus ?? 'IN_PROGRESS' : null,
+  };
+}
+
+let demoTasks = DEMO_TASKS.map((task) => normalizeTask(task as Task));
 
 const DETAIL_FIELDS: Array<keyof UpdateTaskInput> = ['taskType', 'title', 'description'];
 
@@ -210,7 +218,9 @@ function uniqueDocumentationActions(changes: ActivityChange[]) {
   return Array.from(new Set(changes.map((change) => getDocumentationActionForField(change.field)))) as ChangeDocumentationAction[];
 }
 
-function classifyTaskUpdateAction(changes: ActivityChange[]): TaskActivityAction {
+function classifyTaskUpdateAction(current: Task, next: Task, changes: ActivityChange[]): TaskActivityAction {
+  if (current.status !== next.status && next.status === 'DONE') return 'task.completed';
+  if (current.status === 'DONE' && next.status !== 'DONE') return 'task.reopened';
   if (changes.length === 1 && changes[0].field === 'status') return 'task.status_changed';
   if (changes.length === 1 && changes[0].field === 'assigneeId') return 'task.assigned';
   if (changes.length === 1 && changes[0].field === 'dueAt') return 'task.rescheduled';
@@ -219,10 +229,18 @@ function classifyTaskUpdateAction(changes: ActivityChange[]): TaskActivityAction
 
 function buildNextTask(current: Task, input: UpdateTaskInput, now: string): Task {
   const status = input.status ?? current.status;
+  const waitingFromStatus = status === 'WAITING'
+    ? current.status === 'WAITING'
+      ? current.waitingFromStatus ?? 'IN_PROGRESS'
+      : current.status === 'TODO'
+        ? 'TODO'
+        : 'IN_PROGRESS'
+    : null;
   return {
     ...current,
     ...input,
     status,
+    waitingFromStatus,
     completedAt: status === 'DONE' ? current.completedAt ?? now : null,
     updatedAt: now,
   };
@@ -238,20 +256,16 @@ function diffTasks(current: Task, next: Task, fields: Array<keyof Task | keyof U
 function previewTaskUpdateInternal(task: Task, input: UpdateTaskInput, options: TaskUpdateOptions = {}): TaskActivityPreview {
   const next = buildNextTask(task, input, new Date().toISOString());
   const changes = diffTasks(task, next, getTaskUpdateFields(input));
+  const action = options.action ?? classifyTaskUpdateAction(task, next, changes);
   return {
-    action: options.action ?? classifyTaskUpdateAction(changes),
+    action,
     changes,
-    documentationActions: options.documentationActions ?? uniqueDocumentationActions(changes),
+    documentationActions: options.documentationActions
+      ?? (action === 'task.completed' || action === 'task.reopened'
+        ? ['task.complete_reopen']
+        : uniqueDocumentationActions(changes)),
     isDirectLeadTask: isDirectLeadTask(task),
   };
-}
-
-function validateCompletionTransition(current: Task, input: UpdateTaskInput, options: TaskUpdateOptions) {
-  if (options.allowCompletionTransition) return;
-  if (input.status === 'DONE') throw Object.assign(new Error('Use completeTask to complete a task.'), { status: 422 });
-  if (current.status === 'DONE' && input.status !== undefined) {
-    throw Object.assign(new Error('Use reopenTask to reopen a completed task.'), { status: 422 });
-  }
 }
 
 function buildTaskCreatedChanges(task: Task): ActivityChange[] {
@@ -412,6 +426,7 @@ export function createTask(_token: string, input: CreateTaskInput, context: Task
     description: input.description ?? null,
     dueAt: input.dueAt ?? null,
     status: input.status ?? 'TODO',
+    waitingFromStatus: null,
     completedAt: input.status === 'DONE' ? now : null,
     assigneeId: input.assigneeId ?? null,
     createdAt: now,
@@ -429,7 +444,6 @@ function applyTaskUpdate(_token: string, id: string, input: UpdateTaskInput, con
   const index = demoTasks.findIndex(t => t.id === id);
   if (index < 0) return Promise.reject(Object.assign(new Error('Not found'), { status: 404 }));
   const current = demoTasks[index];
-  validateCompletionTransition(current, input, options);
   const documentation = validateDocumentation(context);
   const next = buildNextTask(current, input, new Date().toISOString());
   const preview = previewTaskUpdateInternal(current, input, options);

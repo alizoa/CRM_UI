@@ -1021,7 +1021,7 @@ function NextActionCard({
       ) : null}
       {!tasksLoading && task ? (
         <div className="mt-5 space-y-3 text-sm text-gray-700">
-          <p className="flex items-start gap-2 font-medium text-gray-900"><Icon path={ICONS.phone} />{task.title}</p>
+          <p className="flex items-start gap-2 font-medium text-gray-900"><Icon path={ICONS.phone} /><Link to={`/tasks/${task.id}`} className="underline decoration-gray-300 underline-offset-2 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">{task.title}</Link></p>
           <p className={`flex items-start gap-2 ${overdue ? 'font-semibold text-red-700' : 'font-semibold text-gray-900'}`}>
             <Icon path={ICONS.calendar} />
             Due: {formatDateTime(task.dueAt)} {task.dueAt ? `(${formatRelativeDate(task.dueAt)})` : ''}

@@ -8,11 +8,16 @@ import {
 } from '../../lib/activities';
 import { formatRelativeTime } from '../../lib/relative-time';
 import type { Task } from '../../lib/tasks';
+import type { EntityType } from '../../lib/notes';
 
 type TimelineFilter = 'ALL' | 'ACTIVITY' | 'COMMENTS';
 
 type Props = {
-  leadId: string;
+  leadId?: string;
+  entityType?: EntityType;
+  entityId?: string;
+  relatedTaskId?: string;
+  subtitle?: string;
   activities: Activity[];
   loading: boolean;
   error: string | null;
@@ -89,7 +94,19 @@ function canAddLinkedComment(activity: Activity) {
   return !activity.comment;
 }
 
-export function ActivityCommentTimeline({ leadId, activities, loading, error, tasks, onRefresh }: Props) {
+export function ActivityCommentTimeline({
+  leadId,
+  entityType = 'LEAD',
+  entityId,
+  relatedTaskId,
+  subtitle = 'Change history and event-specific comments for this lead.',
+  activities,
+  loading,
+  error,
+  tasks,
+  onRefresh,
+}: Props) {
+  const commentEntityId = entityId ?? leadId ?? '';
   const { user } = useAuth();
   const actor = useMemo(() => ({ actorId: user?.id ?? null, actorDisplayName: userDisplayName(user) }), [user]);
   const [filter, setFilter] = useState<TimelineFilter>('ALL');
@@ -146,7 +163,7 @@ export function ActivityCommentTimeline({ leadId, activities, loading, error, ta
         <div>
           <h2 className="text-base font-semibold text-gray-900">Activity & Comments</h2>
           <p className="mt-1 text-sm text-gray-600">
-            Change history and event-specific comments for this lead.
+            {subtitle}
           </p>
         </div>
         {showFilter ? (
@@ -161,7 +178,9 @@ export function ActivityCommentTimeline({ leadId, activities, loading, error, ta
       </div>
 
       <StandaloneCommentComposer
-        leadId={leadId}
+        entityType={entityType}
+        entityId={commentEntityId}
+        relatedTaskId={relatedTaskId}
         open={composerOpen}
         actor={actor}
         onOpenChange={setComposerOpen}
@@ -210,6 +229,7 @@ export function ActivityCommentTimeline({ leadId, activities, loading, error, ta
               contextComposerOpen={openContextActivityId === activity.id}
               actor={actor}
               onToggleContext={() => handleContextOpen(activity.id)}
+              relatedTaskId={activity.relatedTaskId ?? relatedTaskId}
               onSaved={onRefresh}
             />
           ))}
@@ -251,13 +271,17 @@ function TimelineFilterMenu({ value, onChange }: { value: TimelineFilter; onChan
 }
 
 function StandaloneCommentComposer({
-  leadId,
+  entityType,
+  entityId,
+  relatedTaskId,
   open,
   actor,
   onOpenChange,
   onSaved,
 }: {
-  leadId: string;
+  entityType: EntityType;
+  entityId: string;
+  relatedTaskId?: string;
   open: boolean;
   actor: { actorId: string | null; actorDisplayName: string };
   onOpenChange: (open: boolean) => void;
@@ -279,7 +303,9 @@ function StandaloneCommentComposer({
       {open ? (
         <div id={id} className="mt-3">
           <CommentForm
-            entityId={leadId}
+            entityType={entityType}
+            entityId={entityId}
+            relatedTaskId={relatedTaskId}
             actor={actor}
             submitLabel="Save"
             autoFocus
@@ -302,6 +328,7 @@ function TimelineEntry({
   contextComposerOpen,
   actor,
   onToggleContext,
+  relatedTaskId,
   onSaved,
 }: {
   activity: Activity;
@@ -310,6 +337,7 @@ function TimelineEntry({
   contextComposerOpen: boolean;
   actor: { actorId: string | null; actorDisplayName: string };
   onToggleContext: () => void;
+  relatedTaskId?: string;
   onSaved: () => void;
 }) {
   const isComment = activity.kind === 'COMMENT';
@@ -348,8 +376,10 @@ function TimelineEntry({
           {contextComposerOpen ? (
             <div id={contextComposerId} className="mt-3 rounded border border-gray-200 bg-gray-50 p-3">
               <CommentForm
+                entityType={activity.entityType}
                 entityId={activity.entityId}
                 parentActivityId={activity.id}
+                relatedTaskId={relatedTaskId}
                 actor={actor}
                 submitLabel="Save"
                 autoFocus
@@ -449,16 +479,20 @@ function LinkedComments({ comments }: { comments: Activity[] }) {
 }
 
 function CommentForm({
+  entityType,
   entityId,
   parentActivityId = null,
+  relatedTaskId,
   actor,
   submitLabel,
   autoFocus = false,
   onCancel,
   onSaved,
 }: {
+  entityType: EntityType;
   entityId: string;
   parentActivityId?: string | null;
+  relatedTaskId?: string;
   actor: { actorId: string | null; actorDisplayName: string };
   submitLabel: string;
   autoFocus?: boolean;
@@ -494,8 +528,9 @@ function CommentForm({
     setError(null);
 
     try {
-      createComment('LEAD', entityId, body, {
+      createComment(entityType, entityId, body, {
         parentActivityId,
+        relatedTaskId,
         actorId: actor.actorId,
         actorDisplayName: actor.actorDisplayName,
       });

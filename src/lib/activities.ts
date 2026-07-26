@@ -48,6 +48,7 @@ export type Activity = {
 export type ActivityFilters = {
   entityType?: EntityType;
   entityId?: string;
+  relatedTaskId?: string;
   action?: string;
   kind?: ActivityKind;
   page?: number;
@@ -212,6 +213,7 @@ export function listActivities(_token: string, filters: ActivityFilters = {}): P
   let data = demoActivities.map(cloneActivity);
   if (filters.entityType) data = data.filter((activity) => activity.entityType === filters.entityType);
   if (filters.entityId) data = data.filter((activity) => activity.entityId === filters.entityId);
+  if (filters.relatedTaskId) data = data.filter((activity) => activity.relatedTaskId === filters.relatedTaskId);
   if (filters.action) data = data.filter((activity) => activity.action === filters.action);
   if (filters.kind) data = data.filter((activity) => activity.kind === filters.kind);
 

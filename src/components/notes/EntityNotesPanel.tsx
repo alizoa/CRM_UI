@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import type { HttpError } from '../../lib/http';
 import { listMembershipOptions, type MembershipOption } from '../../lib/memberships';
@@ -10,6 +10,7 @@ type EntityNotesPanelProps = {
   title?: string;
   description?: string;
   onNotesChanged?: () => void;
+  collapsibleComposer?: boolean;
 };
 
 type RequestError = {
@@ -77,7 +78,7 @@ function buildCreateNoteInput(entityType: EntityType, entityId: string, body: st
   };
 }
 
-export function EntityNotesPanel({ entityType, entityId, title = 'Related notes', description, onNotesChanged }: EntityNotesPanelProps) {
+export function EntityNotesPanel({ entityType, entityId, title = 'Related notes', description, onNotesChanged, collapsibleComposer = false }: EntityNotesPanelProps) {
   const { accessToken } = useAuth();
   const [notesData, setNotesData] = useState<NotesResponse | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -89,6 +90,8 @@ export function EntityNotesPanel({ entityType, entityId, title = 'Related notes'
   const [memberships, setMemberships] = useState<MembershipOption[]>([]);
   const [membershipWarning, setMembershipWarning] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [composerOpen, setComposerOpen] = useState(!collapsibleComposer);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const membershipsByUserId = useMemo(() => new Map(memberships.map((membership) => [membership.userId, membership])), [memberships]);
   const notes = notesData?.data ?? [];
@@ -97,6 +100,12 @@ export function EntityNotesPanel({ entityType, entityId, title = 'Related notes'
   const refreshNotes = useCallback(() => {
     setRefreshKey((current) => current + 1);
   }, []);
+
+  useEffect(() => {
+    if (composerOpen) {
+      textareaRef.current?.focus();
+    }
+  }, [composerOpen]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -211,6 +220,9 @@ export function EntityNotesPanel({ entityType, entityId, title = 'Related notes'
       await createNote(accessToken, buildCreateNoteInput(entityType, entityId, body));
       setBody('');
       setSuccessMessage('Note created.');
+      if (collapsibleComposer) {
+        setComposerOpen(false);
+      }
       refreshNotes();
       onNotesChanged?.();
     } catch (requestError) {
@@ -235,11 +247,33 @@ export function EntityNotesPanel({ entityType, entityId, title = 'Related notes'
       {successMessage ? <p className="mt-4 rounded border border-green-200 bg-green-50 p-3 text-sm text-green-800">{successMessage}</p> : null}
       {membershipWarning ? <p className="mt-4 rounded border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">{membershipWarning}</p> : null}
 
-      <form className="mt-5" onSubmit={handleCreateSubmit}>
+      {collapsibleComposer && !composerOpen ? (
+        <button
+          type="button"
+          onClick={() => {
+            setComposerOpen(true);
+            setCreateError(null);
+            setSuccessMessage(null);
+          }}
+          className="mt-4 rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+        >
+          Add note
+        </button>
+      ) : null}
+
+      {composerOpen ? <form className="mt-5" onSubmit={handleCreateSubmit}>
         <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
           New note
           <textarea
+            ref={textareaRef}
             value={body}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && !createLoading) {
+                setBody('');
+                setCreateError(null);
+                setComposerOpen(false);
+              }
+            }}
             onChange={(event) => {
               setBody(event.target.value);
               setCreateError(null);
@@ -258,20 +292,36 @@ export function EntityNotesPanel({ entityType, entityId, title = 'Related notes'
           >
             {createLoading ? 'Creating...' : 'Create note'}
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setBody('');
-              setCreateError(null);
-              setSuccessMessage(null);
-            }}
-            disabled={createLoading}
-            className="rounded border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-gray-400"
-          >
-            Reset
-          </button>
+          {collapsibleComposer ? (
+            <button
+              type="button"
+              onClick={() => {
+                setBody('');
+                setCreateError(null);
+                setSuccessMessage(null);
+                setComposerOpen(false);
+              }}
+              disabled={createLoading}
+              className="rounded border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-gray-400"
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setBody('');
+                setCreateError(null);
+                setSuccessMessage(null);
+              }}
+              disabled={createLoading}
+              className="rounded border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-gray-400"
+            >
+              Reset
+            </button>
+          )}
         </div>
-      </form>
+      </form> : null}
 
       {notesLoading ? <p className="mt-5 rounded border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">Loading related notes...</p> : null}
 
@@ -288,7 +338,7 @@ export function EntityNotesPanel({ entityType, entityId, title = 'Related notes'
         </div>
       ) : null}
 
-      {!notesLoading && !notesError && notes.length === 0 ? (
+      {!notesLoading && !notesError && notes.length === 0 && !(collapsibleComposer && composerOpen) ? (
         <p className="mt-5 rounded border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">No related notes yet.</p>
       ) : null}
 

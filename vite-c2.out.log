@@ -1,0 +1,75 @@
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m7319[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5173[22m/[39m
+[2m17:27:14[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/settings/ChangeDocumentationSettingsSection.tsx, /src/index.css[22m
+[2m17:41:11[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mc3-dialog-harness.html[22m
+[2m17:46:36[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mc3-dialog-harness.html[22m
+[2m18:02:08[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mc3-focus-harness.html[22m
+[2m18:06:41[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mc3-focus-harness.html[22m
+[2m18:56:07[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/pages/LeadsPage.tsx[22m
+[2m18:57:26[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/pages/LeadsPage.tsx[22m
+[2m18:58:09[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/pages/LeadsPage.tsx[22m
+[2m18:58:39[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/LeadsPage.tsx[22m
+[2m18:58:39[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/LeadsPage.tsx[22m
+[2m19:01:19[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/pages/LeadsPage.tsx[22m
+[2m19:03:55[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/LeadsPage.tsx, /src/index.css[22m
+[2m19:04:38[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/LeadsPage.tsx, /src/index.css[22m
+[2m19:05:40[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/LeadDetailPage.tsx, /src/index.css[22m
+[2m19:08:59[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/LeadDetailPage.tsx, /src/index.css[22m
+[2m19:09:20[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/leads/ActivityCommentTimeline.tsx, /src/index.css[22m
+[2m19:39:57[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/pages/LeadsPage.tsx[22m
+[2m19:40:32[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/LeadDetailPage.tsx, /src/index.css[22m
+[2m20:12:38[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/DealDetailPage.tsx, /src/pages/ContactDetailPage.tsx, /src/pages/LeadsPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/components/tasks/EntityTasksPanel.tsx, /src/components/tasks/TaskDetailModal.tsx, /src/components/tasks/TaskKanbanView.tsx, /src/components/tasks/TaskCalendarView.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
+[2m20:14:26[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/DealDetailPage.tsx, /src/pages/ContactDetailPage.tsx, /src/pages/LeadsPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/components/tasks/EntityTasksPanel.tsx, /src/components/tasks/TaskDetailModal.tsx, /src/components/tasks/TaskKanbanView.tsx, /src/components/tasks/TaskCalendarView.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
+[2m20:14:26[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/DealDetailPage.tsx, /src/pages/ContactDetailPage.tsx, /src/pages/LeadsPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/components/tasks/EntityTasksPanel.tsx, /src/components/tasks/TaskDetailModal.tsx, /src/components/tasks/TaskKanbanView.tsx, /src/components/tasks/TaskCalendarView.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
+[2m20:15:28[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/DealDetailPage.tsx, /src/pages/ContactDetailPage.tsx, /src/pages/LeadsPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/components/tasks/EntityTasksPanel.tsx, /src/components/tasks/TaskDetailModal.tsx, /src/components/tasks/TaskKanbanView.tsx, /src/components/tasks/TaskCalendarView.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
+[2m20:15:28[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/DealDetailPage.tsx, /src/pages/ContactDetailPage.tsx, /src/pages/LeadsPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/components/tasks/EntityTasksPanel.tsx, /src/components/tasks/TaskDetailModal.tsx, /src/components/tasks/TaskKanbanView.tsx, /src/components/tasks/TaskCalendarView.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
+[2m20:16:53[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskDetailModal.tsx, /src/index.css[22m
+[2m20:18:00[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/EntityTasksPanel.tsx, /src/index.css[22m
+[2m20:19:23[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:20:18[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:20:18[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:21:00[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:21:00[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:21:43[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:23:00[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskKanbanView.tsx, /src/index.css[22m
+[2m20:23:43[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskKanbanView.tsx, /src/index.css[22m
+[2m20:25:09[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskKanbanView.tsx, /src/index.css[22m
+[2m20:25:46[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskCalendarView.tsx, /src/index.css[22m
+[2m20:26:47[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/WorklistPage.tsx, /src/index.css[22m
+[2m20:26:47[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/WorklistPage.tsx, /src/index.css[22m
+[2m20:27:43[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/WorklistPage.tsx, /src/index.css[22m
+[2m20:28:45[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/WorklistPage.tsx, /src/index.css[22m
+[2m20:29:35[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/LeadDetailPage.tsx, /src/index.css[22m
+[2m20:30:38[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/LeadsPage.tsx, /src/index.css[22m
+[2m20:31:44[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/whatsapp/CrmContextPanel.tsx, /src/index.css[22m
+[2m20:35:41[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/pages/DealDetailPage.tsx, /src/pages/ContactDetailPage.tsx, /src/pages/LeadsPage.tsx, /src/pages/TasksPage.tsx, /src/pages/SettingsPage.tsx, /src/pages/DashboardPage.tsx, /src/components/tasks/EntityTasksPanel.tsx, /src/components/tasks/TaskDetailModal.tsx, /src/components/tasks/TaskKanbanView.tsx, /src/components/tasks/TaskCalendarView.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
+[2m20:36:43[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/whatsapp/CrmContextPanel.tsx, /src/index.css[22m
+[2m20:45:20[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskKanbanView.tsx, /src/index.css[22m
+[2m20:46:03[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/leads/ActivityCommentTimeline.tsx, /src/index.css[22m
+[2m20:54:45[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:56:36[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:57:24[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:58:13[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:59:33[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m20:59:33[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m21:00:14[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskKanbanView.tsx, /src/index.css[22m
+[2m21:00:48[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskKanbanView.tsx, /src/index.css[22m
+[2m21:02:32[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskKanbanView.tsx, /src/index.css[22m
+[2m21:03:10[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskCalendarView.tsx, /src/index.css[22m
+[2m21:03:38[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/WorklistPage.tsx, /src/index.css[22m
+[2m21:04:25[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/WorklistPage.tsx, /src/index.css[22m
+[2m21:05:07[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/WorklistPage.tsx, /src/index.css[22m
+[2m21:05:37[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/LeadDetailPage.tsx, /src/index.css[22m
+[2m21:06:33[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/LeadDetailPage.tsx, /src/index.css[22m
+[2m21:07:54[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/whatsapp/CrmContextPanel.tsx, /src/index.css[22m
+[2m21:08:54[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/whatsapp/CrmContextPanel.tsx, /src/index.css[22m
+[2m21:21:41[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/TasksPage.tsx, /src/components/tasks/TaskKanbanView.tsx, /src/components/tasks/TaskCalendarView.tsx, /src/pages/WorklistPage.tsx, /src/pages/LeadDetailPage.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
+[2m21:22:31[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/TasksPage.tsx, /src/index.css[22m
+[2m21:23:17[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/WorklistPage.tsx, /src/index.css[22m
+[2m21:24:01[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/tasks/TaskKanbanView.tsx, /src/index.css[22m
+[2m22:10:41[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WhatsAppPage.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
+[2m22:10:41[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WhatsAppPage.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
+[2m22:13:31[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WhatsAppPage.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
+[2m22:13:31[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/pages/WhatsAppPage.tsx, /src/components/whatsapp/CrmContextPanel.tsx[22m
