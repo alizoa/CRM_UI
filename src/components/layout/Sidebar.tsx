@@ -4,16 +4,10 @@ import { SIDEBAR_LINKS } from '../../lib/constants';
 const ICON_PATHS: Record<(typeof SIDEBAR_LINKS)[number]['label'], string> = {
   Account:
     'M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm7 8a7 7 0 0 0-14 0',
-  Contacts:
-    'M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3ZM8 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3Zm8 3a5 5 0 0 1 5 5M3 19a5 5 0 0 1 10 0',
   Leads:
     'M12 21a9 9 0 1 0-9-9m9 9v-4m0-8V5m-4 8h8',
-  Orders:
-    'M6 7h12l1 13H5L6 7Zm3 0V5a3 3 0 0 1 6 0v2M8 11h8',
   Dashboard:
     'M4 5h6v6H4V5Zm10 0h6v4h-6V5ZM4 15h6v4H4v-4Zm10-2h6v6h-6v-6Z',
-  Deals:
-    'M4 8h16v11H4V8Zm4 0V5h8v3M4 12h16',
   Team:
     'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21v-2a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v2',
   Settings:
